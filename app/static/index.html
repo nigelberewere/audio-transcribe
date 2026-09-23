@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Offline Legal Transcription</title><link rel="stylesheet" href="/static/style.css"></head>
+<body>
+<main class="shell">
+  <header><div><p class="eyebrow">PRIVATE / LOCAL PROCESSING</p><h1>Meeting transcription queue</h1></div><button id="logout" class="quiet">Sign out</button></header>
+  <section id="login" class="panel login"><h2>Sign in</h2><form id="loginForm"><input name="username" placeholder="Username" required><input name="password" type="password" placeholder="Password" required><button>Enter workspace</button><p id="loginError" class="error"></p></form></section>
+  <section id="workspace" hidden>
+    <section class="panel upload"><div class="drop" id="drop"><strong>Drop an audio or video recording here</strong><span>MP3, WAV, M4A, MP4, MKV, OGG, FLAC, WEBM</span><input id="file" type="file" accept=".mp3,.wav,.m4a,.mp4,.mkv,.ogg,.flac,.webm"></div><div class="options"><label>Model<select id="model"><option value="auto">Auto (queue policy)</option><option value="large-v3">Force large-v3</option><option value="medium">Force medium</option></select></label><label>Language<select id="language"><option value="auto">Auto-detect</option><option value="en">English</option></select></label><label>Initial prompt<input id="prompt" placeholder="Names, terminology, case numbers"></label><label>Formats<input id="formats" value="txt,txt_timestamps,srt,vtt,docx,json"></label><button id="upload">Add to queue</button></div><p id="uploadError" class="error"></p></section>
+    <section class="section-head"><div><p class="eyebrow">FIFO WORKER</p><h2>Jobs</h2></div><button id="refresh" class="quiet">Refresh</button></section><section id="jobs" class="jobs"></section>
+  </section>
+</main><script src="/static/app.js"></script>
+</body></html>

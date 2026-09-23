@@ -1,0 +1,6 @@
+{
+  "default_model": "large-v3",
+  "fallback_model": "medium",
+  "queue_threshold": 2,
+  "auto_delete_days": 0
+}
