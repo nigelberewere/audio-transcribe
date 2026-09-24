@@ -7,7 +7,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -85,8 +85,6 @@ def login(username: str = Form(...), password: str = Form(...)):
     with database.connect() as connection:
         row = connection.execute("SELECT password_hash, role, active FROM users WHERE username = ?", (username,)).fetchone()
     if not row or not row["active"] or not verify_password(password, row["password_hash"]):
-        reason = "unknown user" if not row else "inactive account" if not row["active"] else "invalid password"
-        database.add_audit_log(username, "login_failed", details=reason)
         raise HTTPException(status_code=401, detail="Invalid username or password")
     token = secrets.token_urlsafe(32); sessions[token] = {"username": username, "role": row["role"]}
     response = {"ok": True, "username": username}
@@ -99,8 +97,6 @@ def login(username: str = Form(...), password: str = Form(...)):
 def admin_login(username: str = Form(...), password: str = Form(...)):
     account = database.get_user(username)
     if not account or not account["active"] or account["role"] != "admin" or not verify_password(password, account["password_hash"]):
-        reason = "unknown user" if not account else "inactive account" if not account["active"] else "not an administrator" if account["role"] != "admin" else "invalid password"
-        database.add_audit_log(username, "login_failed", details=reason)
         raise HTTPException(status_code=401, detail="Invalid administrator credentials")
     token = secrets.token_urlsafe(32); sessions[token] = {"username": username, "role": "admin"}
     from fastapi.responses import JSONResponse
@@ -171,7 +167,6 @@ def delete_job(job_id: str, user: str = Depends(current_user)):
         if path.is_dir(): shutil.rmtree(path, ignore_errors=True)
         else: path.unlink(missing_ok=True)
     database.update_job(job_id, status="deleted")
-    database.add_audit_log(user, "job_deleted", job_id, f"filename: {job['filename']}")
     return {"ok": True}
 
 
@@ -190,7 +185,6 @@ def create_admin_user(username: str = Form(...), password: str = Form(...), role
     if database.get_user(username):
         raise HTTPException(status_code=409, detail="Username already exists")
     database.create_user(username, hash_password(password), role, admin)
-    database.add_audit_log(admin, "user_created", username, f"role: {role}")
     return {"ok": True}
 
 
@@ -221,43 +215,9 @@ def update_admin_user(username: str, role: str | None = Form(None), active: int 
     fields = {key: value for key, value in {"role": role, "active": active}.items() if value is not None}
     if fields:
         database.update_user(username, **fields)
-        if role is not None and role != account["role"]:
-            database.add_audit_log(admin, "user_role_changed", username, f"{account['role']} -> {role}")
-        if active is not None and active != account["active"]:
-            database.add_audit_log(admin, "user_enabled" if active else "user_disabled", username)
-    return {"ok": True}
-
-
-@app.post("/api/admin/users/{username}/reset-password")
-def reset_user_password(username: str, new_password: str = Form(...), confirm_password: str = Form(...), admin: str = Depends(current_admin)):
-    if not database.get_user(username):
-        raise HTTPException(status_code=404, detail="User not found")
-    if len(new_password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    if new_password != confirm_password:
-        raise HTTPException(status_code=400, detail="Passwords do not match")
-    database.update_user(username, password_hash=hash_password(new_password))
-    database.add_audit_log(admin, "user_password_reset", username)
     return {"ok": True}
 
 
 @app.get("/api/admin/overview")
 def admin_overview(_: str = Depends(current_admin)):
     return {"total_users": database.count_users(), "active_jobs": database.count_active_jobs(), "completed_jobs_today": database.count_completed_jobs_today()}
-
-
-@app.get("/api/admin/audit-log")
-def admin_audit_log(
-    actor: str | None = Query(None),
-    action: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=50),
-    offset: int = Query(0, ge=0),
-    _: str = Depends(current_admin),
-):
-    entries, has_more = database.list_audit_log(limit, offset, actor, action)
-    return {
-        "entries": entries,
-        "has_more": has_more,
-        "actors": database.audit_log_actors(),
-        "actions": database.audit_log_actions(),
-    }

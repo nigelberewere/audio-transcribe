@@ -33,14 +33,6 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TEXT NOT NULL,
     created_by TEXT
 );
-CREATE TABLE IF NOT EXISTS audit_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    actor TEXT NOT NULL,
-    action TEXT NOT NULL,
-    target TEXT,
-    details TEXT,
-    created_at TEXT NOT NULL
-);
 """
 
 
@@ -104,46 +96,6 @@ class Database:
         assignments = ", ".join(f"{key} = ?" for key in fields)
         with self.connect() as connection:
             connection.execute(f"UPDATE users SET {assignments} WHERE username = ?", [*fields.values(), username])
-
-    def add_audit_log(self, actor: str, action: str, target: str | None = None, details: str | None = None) -> None:
-        with self.connect() as connection:
-            connection.execute(
-                "INSERT INTO audit_log (actor, action, target, details, created_at) VALUES (?, ?, ?, ?, ?)",
-                (actor, action, target, details, now()),
-            )
-
-    def list_audit_log(
-        self,
-        limit: int = 50,
-        offset: int = 0,
-        actor: str | None = None,
-        action: str | None = None,
-    ) -> tuple[list[dict[str, Any]], bool]:
-        filters: list[str] = []
-        values: list[Any] = []
-        if actor:
-            filters.append("actor = ?")
-            values.append(actor)
-        if action:
-            filters.append("action = ?")
-            values.append(action)
-        where = f" WHERE {' AND '.join(filters)}" if filters else ""
-        with self.connect() as connection:
-            rows = connection.execute(
-                f"SELECT id, actor, action, target, details, created_at FROM audit_log{where} ORDER BY id DESC LIMIT ? OFFSET ?",
-                [*values, limit + 1, offset],
-            ).fetchall()
-        return [dict(row) for row in rows[:limit]], len(rows) > limit
-
-    def audit_log_actors(self) -> list[str]:
-        with self.connect() as connection:
-            rows = connection.execute("SELECT DISTINCT actor FROM audit_log ORDER BY actor").fetchall()
-        return [row[0] for row in rows]
-
-    def audit_log_actions(self) -> list[str]:
-        with self.connect() as connection:
-            rows = connection.execute("SELECT DISTINCT action FROM audit_log ORDER BY action").fetchall()
-        return [row[0] for row in rows]
 
     def count_users(self) -> int:
         with self.connect() as connection:
