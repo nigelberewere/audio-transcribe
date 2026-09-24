@@ -8,6 +8,7 @@ from pathlib import Path
 from .audio import convert_to_wav
 from .config import Settings
 from .db import Database
+from .diarizer import assign_speakers_to_segments, diarize_audio
 from .formats import write_outputs
 from .queue_policy import QueuePolicy
 
@@ -58,15 +59,27 @@ class TranscriptionWorker:
         segments = json.loads(checkpoint.read_text(encoding="utf-8")) if checkpoint.exists() else []
         self._transcribe(job, model, wav_path, checkpoint, segments)
         segments = json.loads(checkpoint.read_text(encoding="utf-8"))
+        if job.get("diarization"):
+            speaker_turns = diarize_audio(wav_path)
+            segments = assign_speakers_to_segments(segments, speaker_turns)
+            checkpoint.write_text(json.dumps(segments, indent=2), encoding="utf-8")
         write_outputs(job, segments, job_root / "outputs")
         self.database.update_job(job["id"], status="done", progress=100, elapsed_seconds=0, eta_seconds=0, completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
     def _transcribe(self, job: dict, model_name: str, wav_path: Path, checkpoint: Path, segments: list[dict]) -> None:
         from faster_whisper import WhisperModel
-        model = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=os.cpu_count() or 1, download_root=str(self.settings.model_dir))
+        local_model = self.settings.model_dir / f"faster-whisper-{model_name}"
+        cached_snapshots = self.settings.model_dir / "huggingface" / "hub" / f"models--Systran--faster-whisper-{model_name}" / "snapshots"
+        snapshots = sorted(cached_snapshots.glob("*")) if cached_snapshots.is_dir() else []
+        model_source = str(local_model) if local_model.is_dir() else str(snapshots[0]) if snapshots else model_name
+        model = WhisperModel(model_source, device="cpu", compute_type="int8", cpu_threads=os.cpu_count() or 1, download_root=str(self.settings.model_dir))
         audio_offset = segments[-1]["end"] if segments else 0
         language = None if job["language"] == "auto" else job["language"]
         whisper_segments, info = model.transcribe(str(wav_path), language=language, initial_prompt=job["initial_prompt"] or None, vad_filter=True, condition_on_previous_text=True, without_timestamps=False)
+        job["duration"] = getattr(info, "duration", 0.0) or 0.0
+        job["detected_language"] = getattr(info, "language", job["language"]) or job["language"]
+        job["device"] = "cpu"
+        job["compute_type"] = "int8"
         started = time.monotonic()
         for segment in whisper_segments:
             if segment.end <= audio_offset:

@@ -19,7 +19,7 @@ class Settings:
         self.queue_threshold = int(os.getenv("TRANSCRIBE_QUEUE_THRESHOLD", values["queue_threshold"]))
         self.auto_delete_days = int(os.getenv("TRANSCRIBE_AUTO_DELETE_DAYS", values["auto_delete_days"]))
         self.session_secret = os.getenv("TRANSCRIBE_SESSION_SECRET", "change-this-secret")
-        self.admin_user = os.getenv("TRANSCRIBE_ADMIN_USER", "admin")
+        self.admin_user = os.getenv("TRANSCRIBE_ADMIN_USER", "")
         self.admin_password = os.getenv("TRANSCRIBE_ADMIN_PASSWORD", "")
 
     @property

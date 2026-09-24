@@ -9,9 +9,9 @@ from app.worker import TranscriptionWorker
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Offline legal meeting transcription")
+    parser = argparse.ArgumentParser(description="Zingsa Files Center meeting transcription")
     parser.add_argument("file")
-    parser.add_argument("--model", default="auto", choices=["auto", "large-v3", "medium"])
+    parser.add_argument("--model", default="auto", choices=["auto", "large-v3", "medium", "small", "tiny"])
     parser.add_argument("--format", default="txt", help="Comma-separated: txt,txt_timestamps,srt,vtt,docx,json")
     parser.add_argument("--language", default="auto")
     parser.add_argument("--initial-prompt", default="")

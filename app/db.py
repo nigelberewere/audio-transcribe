@@ -27,7 +27,19 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE TABLE IF NOT EXISTS users (
     username TEXT PRIMARY KEY,
-    password_hash TEXT NOT NULL
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    created_by TEXT
+);
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target TEXT,
+    details TEXT,
+    created_at TEXT NOT NULL
 );
 """
 
@@ -42,6 +54,16 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
             connection.executescript(SCHEMA)
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(users)")}
+            migrations = {
+                "role": "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'",
+                "active": "ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1",
+                "created_at": "ALTER TABLE users ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+                "created_by": "ALTER TABLE users ADD COLUMN created_by TEXT",
+            }
+            for name, statement in migrations.items():
+                if name not in columns:
+                    connection.execute(statement)
 
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30)
@@ -60,6 +82,81 @@ class Database:
         with self.connect() as connection:
             row = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
         return self._decode(row) if row else None
+
+    def get_user(self, username: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+        return dict(row) if row else None
+
+    def list_users(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT username, role, active, created_at, created_by FROM users ORDER BY username").fetchall()
+        return [dict(row) for row in rows]
+
+    def create_user(self, username: str, password_hash: str, role: str, created_by: str | None) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO users (username, password_hash, role, active, created_at, created_by) VALUES (?, ?, ?, 1, ?, ?)",
+                (username, password_hash, role, now(), created_by),
+            )
+
+    def update_user(self, username: str, **fields: Any) -> None:
+        assignments = ", ".join(f"{key} = ?" for key in fields)
+        with self.connect() as connection:
+            connection.execute(f"UPDATE users SET {assignments} WHERE username = ?", [*fields.values(), username])
+
+    def add_audit_log(self, actor: str, action: str, target: str | None = None, details: str | None = None) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO audit_log (actor, action, target, details, created_at) VALUES (?, ?, ?, ?, ?)",
+                (actor, action, target, details, now()),
+            )
+
+    def list_audit_log(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        actor: str | None = None,
+        action: str | None = None,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        filters: list[str] = []
+        values: list[Any] = []
+        if actor:
+            filters.append("actor = ?")
+            values.append(actor)
+        if action:
+            filters.append("action = ?")
+            values.append(action)
+        where = f" WHERE {' AND '.join(filters)}" if filters else ""
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"SELECT id, actor, action, target, details, created_at FROM audit_log{where} ORDER BY id DESC LIMIT ? OFFSET ?",
+                [*values, limit + 1, offset],
+            ).fetchall()
+        return [dict(row) for row in rows[:limit]], len(rows) > limit
+
+    def audit_log_actors(self) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT DISTINCT actor FROM audit_log ORDER BY actor").fetchall()
+        return [row[0] for row in rows]
+
+    def audit_log_actions(self) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT DISTINCT action FROM audit_log ORDER BY action").fetchall()
+        return [row[0] for row in rows]
+
+    def count_users(self) -> int:
+        with self.connect() as connection:
+            return int(connection.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+
+    def count_active_jobs(self) -> int:
+        with self.connect() as connection:
+            return int(connection.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('waiting', 'processing')").fetchone()[0])
+
+    def count_completed_jobs_today(self) -> int:
+        today = datetime.now(timezone.utc).date().isoformat()
+        with self.connect() as connection:
+            return int(connection.execute("SELECT COUNT(*) FROM jobs WHERE status = 'done' AND completed_at LIKE ?", (f"{today}%",)).fetchone()[0])
 
     def list_jobs(self) -> list[dict[str, Any]]:
         with self.connect() as connection:

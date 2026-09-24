@@ -1,4 +1,4 @@
-# Offline Legal Transcription
+# Zingsa Files Center
 
 A self-hosted Windows Server transcription queue for confidential meeting recordings. Audio is converted locally with ffmpeg and transcribed with faster-whisper/CTranslate2 on CPU using `int8`. No cloud API is used during operation.
 
