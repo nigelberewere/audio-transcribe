@@ -33,6 +33,51 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TEXT NOT NULL,
     created_by TEXT
 );
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target TEXT,
+    details TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS folders (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    parent_folder_id TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (parent_folder_id) REFERENCES folders(id)
+);
+CREATE TABLE IF NOT EXISTS documents (
+    id TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    storage_path TEXT NOT NULL,
+    folder_id TEXT,
+    uploaded_by TEXT NOT NULL,
+    uploaded_at TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    mime_type TEXT,
+    current_version INTEGER NOT NULL DEFAULT 1,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (folder_id) REFERENCES folders(id)
+);
+CREATE TABLE IF NOT EXISTS document_versions (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    version_number INTEGER NOT NULL,
+    storage_path TEXT NOT NULL,
+    uploaded_by TEXT NOT NULL,
+    uploaded_at TEXT NOT NULL,
+    change_note TEXT,
+    FOREIGN KEY (document_id) REFERENCES documents(id)
+);
+CREATE TABLE IF NOT EXISTS document_tags (
+    document_id TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    PRIMARY KEY (document_id, tag),
+    FOREIGN KEY (document_id) REFERENCES documents(id)
+);
 """
 
 
@@ -92,6 +137,31 @@ class Database:
                 (username, password_hash, role, now(), created_by),
             )
 
+    def add_audit_log(self, actor: str, action: str, target: str | None, details: str | None) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO audit_log (actor, action, target, details, created_at) VALUES (?, ?, ?, ?, ?)",
+                (actor, action, target, details, now()),
+            )
+
+    def list_audit_log(self, actor: str | None = None, action: str | None = None, limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], bool, list[str], list[str]]:
+        filters = []
+        values: list[Any] = []
+        if actor:
+            filters.append("actor = ?")
+            values.append(actor)
+        if action:
+            filters.append("action = ?")
+            values.append(action)
+        where = f" WHERE {' AND '.join(filters)}" if filters else ""
+        page_size = max(1, min(limit, 100))
+        query = f"SELECT * FROM audit_log{where} ORDER BY id LIMIT ? OFFSET ?"
+        with self.connect() as connection:
+            rows = connection.execute(query, [*values, page_size + 1, max(0, offset)]).fetchall()
+            actors = [row[0] for row in connection.execute("SELECT DISTINCT actor FROM audit_log ORDER BY actor")]
+            actions = [row[0] for row in connection.execute("SELECT DISTINCT action FROM audit_log ORDER BY action")]
+        return [dict(row) for row in rows[:page_size]], len(rows) > page_size, actors, actions
+
     def update_user(self, username: str, **fields: Any) -> None:
         assignments = ", ".join(f"{key} = ?" for key in fields)
         with self.connect() as connection:
@@ -109,6 +179,87 @@ class Database:
         today = datetime.now(timezone.utc).date().isoformat()
         with self.connect() as connection:
             return int(connection.execute("SELECT COUNT(*) FROM jobs WHERE status = 'done' AND completed_at LIKE ?", (f"{today}%",)).fetchone()[0])
+
+    def create_folder(self, folder_id: str, name: str, parent_folder_id: str | None, created_by: str) -> dict[str, Any]:
+        folder = {"id": folder_id, "name": name, "parent_folder_id": parent_folder_id, "created_by": created_by, "created_at": now()}
+        with self.connect() as connection:
+            connection.execute("INSERT INTO folders (id, name, parent_folder_id, created_by, created_at) VALUES (?, ?, ?, ?, ?)", tuple(folder.values()))
+        return folder
+
+    def list_folders(self, parent_folder_id: str | None = None) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT * FROM folders WHERE parent_folder_id IS ? ORDER BY name", (parent_folder_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_folder(self, folder_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM folders WHERE id = ?", (folder_id,)).fetchone()
+        return dict(row) if row else None
+
+    def create_document(self, document: dict[str, Any], version: dict[str, Any], tags: list[str]) -> None:
+        with self.connect() as connection:
+            connection.execute("INSERT INTO documents (id, filename, storage_path, folder_id, uploaded_by, uploaded_at, file_size, mime_type, current_version, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", tuple(document.values()))
+            connection.execute("INSERT INTO document_versions (id, document_id, version_number, storage_path, uploaded_by, uploaded_at, change_note) VALUES (?, ?, ?, ?, ?, ?, ?)", tuple(version.values()))
+            connection.executemany("INSERT INTO document_tags (document_id, tag) VALUES (?, ?)", [(document["id"], tag) for tag in tags])
+
+    def get_document(self, document_id: str, include_deleted: bool = False) -> dict[str, Any] | None:
+        query = "SELECT d.*, GROUP_CONCAT(t.tag) AS tags FROM documents d LEFT JOIN document_tags t ON t.document_id = d.id WHERE d.id = ?"
+        values: list[Any] = [document_id]
+        if not include_deleted:
+            query += " AND d.deleted = 0"
+        query += " GROUP BY d.id"
+        with self.connect() as connection:
+            row = connection.execute(query, values).fetchone()
+        return self._document(row) if row else None
+
+    def list_documents(self, folder_id: str | None = None, include_deleted: bool = False) -> list[dict[str, Any]]:
+        query = "SELECT d.*, GROUP_CONCAT(t.tag) AS tags FROM documents d LEFT JOIN document_tags t ON t.document_id = d.id WHERE d.folder_id IS ?"
+        values: list[Any] = [folder_id]
+        if not include_deleted:
+            query += " AND d.deleted = 0"
+        query += " GROUP BY d.id ORDER BY d.filename"
+        with self.connect() as connection:
+            rows = connection.execute(query, values).fetchall()
+        return [self._document(row) for row in rows]
+
+    def list_deleted_documents(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT d.*, GROUP_CONCAT(t.tag) AS tags FROM documents d LEFT JOIN document_tags t ON t.document_id = d.id WHERE d.deleted = 1 GROUP BY d.id ORDER BY d.filename").fetchall()
+        return [self._document(row) for row in rows]
+
+    def add_document_version(self, document_id: str, version: dict[str, Any], file_size: int, mime_type: str | None) -> None:
+        with self.connect() as connection:
+            connection.execute("INSERT INTO document_versions (id, document_id, version_number, storage_path, uploaded_by, uploaded_at, change_note) VALUES (?, ?, ?, ?, ?, ?, ?)", tuple(version.values()))
+            connection.execute("UPDATE documents SET storage_path = ?, uploaded_by = ?, uploaded_at = ?, file_size = ?, mime_type = ?, current_version = ? WHERE id = ?", (version["storage_path"], version["uploaded_by"], version["uploaded_at"], file_size, mime_type, version["version_number"], document_id))
+
+    def list_document_versions(self, document_id: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT * FROM document_versions WHERE document_id = ? ORDER BY version_number DESC", (document_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def set_document_tags(self, document_id: str, tags: list[str]) -> None:
+        with self.connect() as connection:
+            connection.execute("DELETE FROM document_tags WHERE document_id = ?", (document_id,))
+            connection.executemany("INSERT INTO document_tags (document_id, tag) VALUES (?, ?)", [(document_id, tag) for tag in tags])
+
+    def set_document_deleted(self, document_id: str, deleted: bool) -> None:
+        with self.connect() as connection:
+            connection.execute("UPDATE documents SET deleted = ? WHERE id = ?", (int(deleted), document_id))
+
+    def document_stats(self) -> dict[str, int]:
+        today = datetime.now(timezone.utc).date().isoformat()
+        with self.connect() as connection:
+            total = connection.execute("SELECT COUNT(*) FROM documents WHERE deleted = 0").fetchone()[0]
+            storage = connection.execute("SELECT COALESCE(SUM(file_size), 0) FROM documents WHERE deleted = 0").fetchone()[0]
+            today_count = connection.execute("SELECT COUNT(*) FROM documents WHERE deleted = 0 AND uploaded_at LIKE ?", (f"{today}%",)).fetchone()[0]
+        return {"total_documents": int(total), "total_storage_used": int(storage), "documents_uploaded_today": int(today_count)}
+
+    @staticmethod
+    def _document(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["tags"] = [tag for tag in (result.pop("tags") or "").split(",") if tag]
+        result["deleted"] = bool(result["deleted"])
+        return result
 
     def list_jobs(self) -> list[dict[str, Any]]:
         with self.connect() as connection:

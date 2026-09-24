@@ -12,6 +12,7 @@ class Settings:
         self.host = os.getenv("TRANSCRIBE_HOST", "0.0.0.0")
         self.port = int(os.getenv("TRANSCRIBE_PORT", "8420"))
         self.data_dir = Path(os.getenv("TRANSCRIBE_DATA_DIR", "storage"))
+        self.documents_storage_path = Path(os.getenv("DOCUMENTS_STORAGE_PATH", values.get("documents_storage_path", str(self.data_dir / "documents"))))
         self.model_dir = Path(os.getenv("TRANSCRIBE_MODEL_DIR", "models"))
         self.ffmpeg_path = os.getenv("TRANSCRIBE_FFMPEG", "ffmpeg")
         self.default_model = os.getenv("TRANSCRIBE_DEFAULT_MODEL", values["default_model"])
@@ -35,5 +36,5 @@ class Settings:
         return self.data_dir / "jobs"
 
     def ensure_directories(self) -> None:
-        for path in (self.data_dir, self.upload_dir, self.job_dir, self.model_dir):
+        for path in (self.data_dir, self.upload_dir, self.job_dir, self.model_dir, self.documents_storage_path):
             path.mkdir(parents=True, exist_ok=True)

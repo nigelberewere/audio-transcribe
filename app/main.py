@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from .audio import SUPPORTED_EXTENSIONS, check_ffmpeg
 from .config import Settings
-from .db import Database
+from .db import Database, now
 from .security import hash_password, verify_password
 from .worker import TranscriptionWorker
 
@@ -85,6 +85,8 @@ def login(username: str = Form(...), password: str = Form(...)):
     with database.connect() as connection:
         row = connection.execute("SELECT password_hash, role, active FROM users WHERE username = ?", (username,)).fetchone()
     if not row or not row["active"] or not verify_password(password, row["password_hash"]):
+        details = "inactive account" if row and not row["active"] else "invalid credentials"
+        database.add_audit_log(username, "login_failed", None, details)
         raise HTTPException(status_code=401, detail="Invalid username or password")
     token = secrets.token_urlsafe(32); sessions[token] = {"username": username, "role": row["role"]}
     response = {"ok": True, "username": username}
@@ -97,6 +99,8 @@ def login(username: str = Form(...), password: str = Form(...)):
 def admin_login(username: str = Form(...), password: str = Form(...)):
     account = database.get_user(username)
     if not account or not account["active"] or account["role"] != "admin" or not verify_password(password, account["password_hash"]):
+        details = "inactive account" if account and not account["active"] else "invalid credentials"
+        database.add_audit_log(username, "login_failed", None, details)
         raise HTTPException(status_code=401, detail="Invalid administrator credentials")
     token = secrets.token_urlsafe(32); sessions[token] = {"username": username, "role": "admin"}
     from fastapi.responses import JSONResponse
@@ -117,6 +121,135 @@ def jobs(user: str = Depends(current_user)):
     for item in results:
         item["queue_position"] = next((index + 1 for index, other in enumerate(results) if other["status"] == "waiting" and other["created_at"] <= item["created_at"]), None) if item["status"] == "waiting" else None
     return results
+
+
+@app.get("/documents", response_class=HTMLResponse)
+def documents_page(_: str = Depends(current_user)) -> FileResponse:
+    return FileResponse(Path(__file__).parent / "static" / "documents.html")
+
+
+def _document_folder(folder_id: str | None) -> str | None:
+    if folder_id and not database.get_folder(folder_id):
+        raise HTTPException(status_code=404, detail="Folder not found")
+    return folder_id
+
+
+def _tags(value: str) -> list[str]:
+    return sorted({tag.strip() for tag in value.split(",") if tag.strip()})
+
+
+@app.get("/api/documents")
+def list_documents(folder_id: str | None = None, user: str = Depends(current_user)):
+    return {"folders": database.list_folders(_document_folder(folder_id)), "documents": database.list_documents(folder_id)}
+
+
+@app.post("/api/documents/folders")
+def create_document_folder(name: str = Form(...), parent_folder_id: str | None = Form(None), user: str = Depends(current_user)):
+    name = name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Folder name is required")
+    folder = database.create_folder(uuid4().hex, name, _document_folder(parent_folder_id), user)
+    return folder
+
+
+@app.post("/api/documents")
+def upload_document(file: UploadFile = File(...), folder_id: str | None = Form(None), tags: str = Form(""), user: str = Depends(current_user)):
+    folder_id = _document_folder(folder_id)
+    document_id = uuid4().hex
+    uploaded_at = now()
+    destination = settings.documents_storage_path / document_id / "1"
+    destination.mkdir(parents=True, exist_ok=True)
+    target = destination / Path(file.filename or "unnamed-file").name
+    size = 0
+    with target.open("wb") as output:
+        while chunk := file.file.read(1024 * 1024):
+            output.write(chunk)
+            size += len(chunk)
+    document = {"id": document_id, "filename": Path(file.filename or "unnamed-file").name, "storage_path": str(target), "folder_id": folder_id, "uploaded_by": user, "uploaded_at": uploaded_at, "file_size": size, "mime_type": file.content_type, "current_version": 1, "deleted": 0}
+    version = {"id": uuid4().hex, "document_id": document_id, "version_number": 1, "storage_path": str(target), "uploaded_by": user, "uploaded_at": uploaded_at, "change_note": None}
+    database.create_document(document, version, _tags(tags))
+    database.add_audit_log(user, "document_uploaded", document_id, f"filename: {document['filename']}")
+    return database.get_document(document_id)
+
+
+@app.get("/api/documents/{document_id}")
+def get_document(document_id: str, user: str = Depends(current_user)):
+    document = database.get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    document["versions"] = database.list_document_versions(document_id)
+    return document
+
+
+@app.get("/api/documents/{document_id}/download")
+def download_document(document_id: str, version: int | None = None, user: str = Depends(current_user)):
+    document = database.get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    path = document["storage_path"]
+    if version is not None:
+        selected = next((item for item in database.list_document_versions(document_id) if item["version_number"] == version), None)
+        if not selected:
+            raise HTTPException(status_code=404, detail="Version not found")
+        path = selected["storage_path"]
+    target = Path(path).resolve()
+    root = (settings.documents_storage_path / document_id).resolve()
+    if root not in target.parents or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(target, filename=document["filename"])
+
+
+@app.post("/api/documents/{document_id}/versions")
+def upload_document_version(document_id: str, file: UploadFile = File(...), change_note: str = Form(""), user: str = Depends(current_user)):
+    document = database.get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    version_number = document["current_version"] + 1
+    destination = settings.documents_storage_path / document_id / str(version_number)
+    destination.mkdir(parents=True, exist_ok=True)
+    target = destination / document["filename"]
+    size = 0
+    with target.open("wb") as output:
+        while chunk := file.file.read(1024 * 1024):
+            output.write(chunk)
+            size += len(chunk)
+    uploaded_at = now()
+    version = {"id": uuid4().hex, "document_id": document_id, "version_number": version_number, "storage_path": str(target), "uploaded_by": user, "uploaded_at": uploaded_at, "change_note": change_note.strip() or None}
+    database.add_document_version(document_id, version, size, file.content_type or document["mime_type"])
+    database.add_audit_log(user, "document_version_added", document_id, f"version: {version_number}")
+    return database.get_document(document_id)
+
+
+@app.put("/api/documents/{document_id}/tags")
+def update_document_tags(document_id: str, tags: str = Form(""), user: str = Depends(current_user)):
+    if not database.get_document(document_id):
+        raise HTTPException(status_code=404, detail="Document not found")
+    database.set_document_tags(document_id, _tags(tags))
+    return database.get_document(document_id)
+
+
+@app.delete("/api/documents/{document_id}")
+def delete_document(document_id: str, user: str = Depends(current_user)):
+    if not database.get_document(document_id):
+        raise HTTPException(status_code=404, detail="Document not found")
+    database.set_document_deleted(document_id, True)
+    database.add_audit_log(user, "document_deleted", document_id, None)
+    return {"ok": True}
+
+
+@app.get("/api/admin/documents/deleted")
+def deleted_documents(_: str = Depends(current_admin)):
+    return database.list_deleted_documents()
+
+
+@app.post("/api/admin/documents/{document_id}/restore")
+def restore_document(document_id: str, admin: str = Depends(current_admin)):
+    document = database.get_document(document_id, include_deleted=True)
+    if not document or not document["deleted"]:
+        raise HTTPException(status_code=404, detail="Deleted document not found")
+    database.set_document_deleted(document_id, False)
+    database.add_audit_log(admin, "document_restored", document_id, None)
+    return database.get_document(document_id)
 
 
 @app.post("/api/jobs")
@@ -185,6 +318,7 @@ def create_admin_user(username: str = Form(...), password: str = Form(...), role
     if database.get_user(username):
         raise HTTPException(status_code=409, detail="Username already exists")
     database.create_user(username, hash_password(password), role, admin)
+    database.add_audit_log(admin, "user_created", username, f"role: {role}")
     return {"ok": True}
 
 
@@ -215,9 +349,33 @@ def update_admin_user(username: str, role: str | None = Form(None), active: int 
     fields = {key: value for key, value in {"role": role, "active": active}.items() if value is not None}
     if fields:
         database.update_user(username, **fields)
+        if role is not None and role != account["role"]:
+            database.add_audit_log(admin, "user_role_changed", username, f"{account['role']} -> {role}")
+        if active == 0 and account["active"]:
+            database.add_audit_log(admin, "user_disabled", username, None)
     return {"ok": True}
+
+
+@app.post("/api/admin/users/{username}/reset-password")
+def reset_user_password(username: str, password: str = Form(...), confirm_password: str = Form(...), admin: str = Depends(current_admin)):
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if password != confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match")
+    if not database.get_user(username):
+        raise HTTPException(status_code=404, detail="User not found")
+    database.update_user(username, password_hash=hash_password(password))
+    database.add_audit_log(admin, "user_password_reset", username, None)
+    return {"ok": True}
+
+
+@app.get("/api/admin/audit-log")
+@app.get("/api/admin/audit")
+def admin_audit_log(actor: str | None = None, action: str | None = None, limit: int = 50, offset: int = 0, _: str = Depends(current_admin)):
+    entries, has_more, actors, actions = database.list_audit_log(actor, action, limit, offset)
+    return {"entries": entries, "has_more": has_more, "actors": actors, "actions": actions}
 
 
 @app.get("/api/admin/overview")
 def admin_overview(_: str = Depends(current_admin)):
-    return {"total_users": database.count_users(), "active_jobs": database.count_active_jobs(), "completed_jobs_today": database.count_completed_jobs_today()}
+    return {"total_users": database.count_users(), "active_jobs": database.count_active_jobs(), "completed_jobs_today": database.count_completed_jobs_today(), **database.document_stats()}
