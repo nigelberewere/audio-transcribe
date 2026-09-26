@@ -35,9 +35,18 @@
   </header>
 
   <section class="panel upload">
-    <div class="drop" id="drop">
-      <strong>Drop an audio or video recording here</strong>
-      <span>MP3, WAV, M4A, MP4, MKV, OGG, FLAC, WEBM</span>
+    <div class="drop" id="drop" role="button" tabindex="0" aria-label="Drop recording or click to browse">
+      <div id="dropContent" class="drop-content">
+        <div class="drop-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="32" height="32" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+        </div>
+        <strong>Drop an audio or video recording here</strong>
+        <span class="drop-help">MP3, WAV, M4A, MP4, MKV, OGG, FLAC, WEBM &middot; or click to browse</span>
+      </div>
       <input id="file" type="file" accept=".mp3,.wav,.m4a,.mp4,.mkv,.ogg,.flac,.webm">
     </div>
     <div class="options">

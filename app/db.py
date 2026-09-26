@@ -362,7 +362,7 @@ class Database:
 
     def list_jobs(self) -> list[dict[str, Any]]:
         with self.connect() as connection:
-            rows = connection.execute("SELECT * FROM jobs ORDER BY created_at").fetchall()
+            rows = connection.execute("SELECT * FROM jobs ORDER BY created_at DESC").fetchall()
         return [self._decode(row) for row in rows]
 
     def update_job(self, job_id: str, **fields: Any) -> None:

@@ -189,8 +189,13 @@ def logout(session: str | None = Cookie(default=None), user: str = Depends(curre
 @app.get("/api/jobs")
 def jobs(user: str = Depends(current_user)):
     results = database.list_jobs()
+    waiting_jobs = sorted(
+        [item for item in results if item["status"] == "waiting"],
+        key=lambda item: item["created_at"],
+    )
+    waiting_positions = {item["id"]: idx + 1 for idx, item in enumerate(waiting_jobs)}
     for item in results:
-        item["queue_position"] = next((index + 1 for index, other in enumerate(results) if other["status"] == "waiting" and other["created_at"] <= item["created_at"]), None) if item["status"] == "waiting" else None
+        item["queue_position"] = waiting_positions.get(item["id"])
     return results
 
 

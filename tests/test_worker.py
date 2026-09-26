@@ -61,3 +61,99 @@ def test_diarization_labels_segments_before_outputs(tmp_path, monkeypatch):
     assert events == ["convert", "transcribe", "diarize", "assign", "outputs"]
     assert database.get_job("job-1")["status"] == "done"
     assert database.get_job("job-1")["error"] is None
+
+
+def test_list_jobs_most_recent_first(tmp_path):
+    settings = Settings()
+    settings.data_dir = tmp_path / "storage"
+    database = Database(settings.db_path)
+
+    database.create_job({
+        "id": "job-old",
+        "filename": "old.mp3",
+        "source_path": "old.mp3",
+        "requested_model": "tiny",
+        "language": "en",
+        "initial_prompt": "",
+        "diarization": False,
+        "formats": ["txt"],
+    })
+    database.update_job("job-old", created_at="2026-01-01T10:00:00+00:00")
+
+    database.create_job({
+        "id": "job-new",
+        "filename": "new.mp3",
+        "source_path": "new.mp3",
+        "requested_model": "tiny",
+        "language": "en",
+        "initial_prompt": "",
+        "diarization": False,
+        "formats": ["txt"],
+    })
+    database.update_job("job-new", created_at="2026-01-02T10:00:00+00:00")
+
+    jobs = database.list_jobs()
+    assert len(jobs) == 2
+    assert jobs[0]["id"] == "job-new"
+    assert jobs[1]["id"] == "job-old"
+
+
+def test_api_jobs_endpoint_ordering_and_queue_positions(tmp_path, monkeypatch):
+    from app import main
+    settings = Settings()
+    settings.data_dir = tmp_path / "storage"
+    database = Database(settings.db_path)
+    monkeypatch.setattr(main, "database", database)
+
+    # 1. Old waiting job
+    database.create_job({
+        "id": "job-1",
+        "filename": "first.mp3",
+        "source_path": "first.mp3",
+        "requested_model": "tiny",
+        "language": "en",
+        "initial_prompt": "",
+        "diarization": False,
+        "formats": ["txt"],
+    })
+    database.update_job("job-1", status="waiting", created_at="2026-01-01T10:00:00+00:00")
+
+    # 2. Done job
+    database.create_job({
+        "id": "job-2",
+        "filename": "second.mp3",
+        "source_path": "second.mp3",
+        "requested_model": "tiny",
+        "language": "en",
+        "initial_prompt": "",
+        "diarization": False,
+        "formats": ["txt"],
+    })
+    database.update_job("job-2", status="done", created_at="2026-01-01T11:00:00+00:00")
+
+    # 3. Newest waiting job
+    database.create_job({
+        "id": "job-3",
+        "filename": "third.mp3",
+        "source_path": "third.mp3",
+        "requested_model": "tiny",
+        "language": "en",
+        "initial_prompt": "",
+        "diarization": False,
+        "formats": ["txt"],
+    })
+    database.update_job("job-3", status="waiting", created_at="2026-01-01T12:00:00+00:00")
+
+    result = main.jobs(user="user")
+
+    # Most recent job is on top (job-3, then job-2, then job-1)
+    assert [j["id"] for j in result] == ["job-3", "job-2", "job-1"]
+
+    # FIFO queue positions:
+    # job-1 was created first, so queue position is 1
+    # job-3 was created later, so queue position is 2
+    # job-2 is done, so queue position is None
+    job_map = {j["id"]: j for j in result}
+    assert job_map["job-1"]["queue_position"] == 1
+    assert job_map["job-2"]["queue_position"] is None
+    assert job_map["job-3"]["queue_position"] == 2

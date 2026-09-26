@@ -3,8 +3,27 @@ import json
 import os
 
 
+def _load_dotenv(path: Path | None = None) -> None:
+    env_file = path or Path(".env")
+    if not env_file.is_file():
+        return
+    try:
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            key = key.strip()
+            val = val.strip().strip("'\"")
+            if key and key not in os.environ:
+                os.environ[key] = val
+    except Exception:
+        pass
+
+
 class Settings:
     def __init__(self) -> None:
+        _load_dotenv()
         values = {"default_model": "large-v3", "fallback_model": "medium", "queue_threshold": 2, "auto_delete_days": 0}
         config_path = Path(os.getenv("TRANSCRIBE_CONFIG", "config.json"))
         if config_path.exists():

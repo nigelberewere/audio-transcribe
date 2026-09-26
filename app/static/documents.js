@@ -164,6 +164,7 @@ async function upload(file) {
   body.append('file', file);
   body.append('folder_id', folderId);
   try {
+    $('message').textContent = `Uploading ${file.name}...`;
     await request('/api/documents', {method: 'POST', body});
     $('message').textContent = '';
     $('file').value = '';
@@ -173,15 +174,52 @@ async function upload(file) {
   }
 }
 
-$('drop').onclick = event => {
-  if (event.target.id !== 'file') $('file').click();
-};
+let docDragCounter = 0;
+const docDrop = $('drop');
+if (docDrop) {
+  docDrop.onclick = event => {
+    if (event.target.id !== 'file') $('file').click();
+  };
+
+  docDrop.onkeydown = event => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      $('file').click();
+    }
+  };
+
+  docDrop.ondragenter = event => {
+    event.preventDefault();
+    docDragCounter++;
+    docDrop.classList.add('dragover');
+  };
+
+  docDrop.ondragover = event => {
+    event.preventDefault();
+    if (!docDrop.classList.contains('dragover')) docDrop.classList.add('dragover');
+  };
+
+  docDrop.ondragleave = event => {
+    event.preventDefault();
+    docDragCounter--;
+    if (docDragCounter <= 0) {
+      docDragCounter = 0;
+      docDrop.classList.remove('dragover');
+    }
+  };
+
+  docDrop.ondrop = event => {
+    event.preventDefault();
+    docDragCounter = 0;
+    docDrop.classList.remove('dragover');
+    if (event.dataTransfer?.files?.[0]) upload(event.dataTransfer.files[0]);
+  };
+}
+
 $('file').onchange = event => event.target.files[0] && upload(event.target.files[0]);
-$('drop').ondragover = event => { event.preventDefault(); };
-$('drop').ondrop = event => {
-  event.preventDefault();
-  event.dataTransfer.files[0] && upload(event.dataTransfer.files[0]);
-};
+
+window.addEventListener('dragover', event => event.preventDefault());
+window.addEventListener('drop', event => event.preventDefault());
 
 $('newFolder').onclick = async () => {
   const name = prompt('Folder name');

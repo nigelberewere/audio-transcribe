@@ -26,6 +26,7 @@ async function loadJobs() {
   try {
     const jobs = await request('/api/jobs');
     const filtered = jobs.filter(job => job.status !== 'deleted');
+    filtered.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
     $('jobs').innerHTML = filtered.length
       ? filtered.map(job => `<article class="job">
           <div>
@@ -61,11 +62,179 @@ $('logout').onclick = async () => {
   location.href = '/';
 };
 
-$('drop').onclick = () => $('file').click();
+let selectedFile = null;
+let dragCounter = 0;
+
+const ALLOWED_AUDIO_EXTS = ['.mp3', '.wav', '.m4a', '.mp4', '.mkv', '.ogg', '.flac', '.webm'];
+
+function formatBytes(value) {
+  if (!value || value === 0) return '0 B';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function validateAudioFile(file) {
+  if (!file) return 'Choose a recording first.';
+  const name = file.name.toLowerCase();
+  const isValid = ALLOWED_AUDIO_EXTS.some(ext => name.endsWith(ext));
+  if (!isValid) {
+    return `Unsupported file format. Please select an audio or video file (${ALLOWED_AUDIO_EXTS.join(', ')}).`;
+  }
+  return null;
+}
+
+function renderDropDefault() {
+  const drop = $('drop');
+  if (!drop) return;
+  drop.classList.remove('has-file', 'dragover');
+  const content = $('dropContent');
+  if (content) {
+    content.innerHTML = `
+      <div class="drop-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="32" height="32" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+      </div>
+      <strong>Drop an audio or video recording here</strong>
+      <span class="drop-help">MP3, WAV, M4A, MP4, MKV, OGG, FLAC, WEBM &middot; or click to browse</span>
+    `;
+  }
+}
+
+function renderDropSelected(file) {
+  const drop = $('drop');
+  if (!drop) return;
+  drop.classList.remove('dragover');
+  drop.classList.add('has-file');
+  const content = $('dropContent');
+  if (content) {
+    content.innerHTML = `
+      <div class="drop-file-selected">
+        <div class="drop-icon-badge" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+        </div>
+        <div class="drop-file-details">
+          <div class="drop-file-status">Recording ready to transcribe</div>
+          <div class="drop-filename" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</div>
+          <div class="drop-meta">
+            <span class="drop-filesize">${formatBytes(file.size)}</span>
+            <span class="drop-sep">&middot;</span>
+            <span class="drop-action-hint">Click or drop another file to replace</span>
+          </div>
+        </div>
+        <button type="button" id="removeFile" class="drop-remove-btn" title="Remove recording" aria-label="Remove recording">&times;</button>
+      </div>
+    `;
+    const removeBtn = $('removeFile');
+    if (removeBtn) {
+      removeBtn.onclick = (e) => {
+        e.stopPropagation();
+        clearFile();
+      };
+    }
+  }
+}
+
+function setFile(file) {
+  const error = validateAudioFile(file);
+  if (error) {
+    $('uploadError').textContent = error;
+    return false;
+  }
+  $('uploadError').textContent = '';
+  selectedFile = file;
+  try {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    $('file').files = dt.files;
+  } catch (_) {}
+  renderDropSelected(file);
+  return true;
+}
+
+function clearFile() {
+  selectedFile = null;
+  if ($('file')) $('file').value = '';
+  $('uploadError').textContent = '';
+  renderDropDefault();
+}
+
+const dropZone = $('drop');
+if (dropZone) {
+  dropZone.onclick = (e) => {
+    if (e.target.closest('#removeFile')) return;
+    $('file').click();
+  };
+
+  dropZone.onkeydown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      $('file').click();
+    }
+  };
+
+  dropZone.ondragenter = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter++;
+    dropZone.classList.add('dragover');
+  };
+
+  dropZone.ondragover = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dropZone.classList.contains('dragover')) {
+      dropZone.classList.add('dragover');
+    }
+  };
+
+  dropZone.ondragleave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter--;
+    if (dragCounter <= 0) {
+      dragCounter = 0;
+      dropZone.classList.remove('dragover');
+    }
+  };
+
+  dropZone.ondrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter = 0;
+    dropZone.classList.remove('dragover');
+    const file = e.dataTransfer?.files?.[0];
+    if (file) {
+      setFile(file);
+    }
+  };
+}
+
+if ($('file')) {
+  $('file').onchange = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setFile(file);
+    }
+  };
+}
+
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => e.preventDefault());
 
 $('upload').onclick = async () => {
-  const file = $('file').files[0];
+  const file = selectedFile || ($('file')?.files?.[0]);
   if (!file) return $('uploadError').textContent = 'Choose a recording first.';
+  const uploadBtn = $('upload');
+  uploadBtn.disabled = true;
+  const originalText = uploadBtn.textContent;
+  uploadBtn.textContent = 'Adding to queue...';
+
   const body = new FormData();
   body.append('file', file);
   body.append('model', $('model').value);
@@ -75,10 +244,13 @@ $('upload').onclick = async () => {
   try {
     await request('/api/jobs', {method: 'POST', body});
     $('uploadError').textContent = '';
-    $('file').value = '';
+    clearFile();
     loadJobs();
   } catch (error) {
     $('uploadError').textContent = error.message;
+  } finally {
+    uploadBtn.disabled = false;
+    uploadBtn.textContent = originalText;
   }
 };
 
