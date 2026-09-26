@@ -91,6 +91,137 @@ def test_document_routes_require_login(document_state):
     assert error.value.status_code == 401
 
 
+# --- Integration Tests: Download, Folders, Tags, and Version History ---
+
+def test_download_round_trip(document_state):
+    known_bytes = b"Exact byte sequence with binary \x00\x01\xfe\xff and text: Round-trip verification."
+    uploaded = main.upload_document(upload("roundtrip.txt", known_bytes), None, "", "member")
+    assert uploaded["id"] is not None
+
+    download_response = main.download_document(uploaded["id"], user="member")
+    assert download_response.status_code == 200
+    assert download_response.filename == "roundtrip.txt"
+    downloaded_bytes = Path(download_response.path).read_bytes()
+    assert downloaded_bytes == known_bytes
+    assert len(downloaded_bytes) == len(known_bytes)
+
+
+def test_nested_folder_navigation(document_state):
+    parent_folder = main.create_document_folder(name="Projects", parent_folder_id=None, user="member")
+    assert parent_folder["id"] is not None
+    assert parent_folder["name"] == "Projects"
+    assert parent_folder["parent_folder_id"] is None
+
+    nested_folder = main.create_document_folder(name="2026", parent_folder_id=parent_folder["id"], user="member")
+    assert nested_folder["id"] is not None
+    assert nested_folder["name"] == "2026"
+    assert nested_folder["parent_folder_id"] == parent_folder["id"]
+
+    doc = main.upload_document(upload("spec.txt", b"Nested specifications"), folder_id=nested_folder["id"], tags="", user="member")
+    assert doc["folder_id"] == nested_folder["id"]
+
+    # Document appears when listing nested folder's contents
+    nested_listing = main.list_documents(folder_id=nested_folder["id"], user="member")
+    assert any(d["id"] == doc["id"] for d in nested_listing["documents"])
+    matched = next(d for d in nested_listing["documents"] if d["id"] == doc["id"])
+    assert matched["filename"] == "spec.txt"
+
+    # Document does NOT appear when listing top-level/root folder
+    root_listing = main.list_documents(folder_id=None, user="member")
+    assert not any(d["id"] == doc["id"] for d in root_listing["documents"])
+
+    # Folder listing endpoint correctly reports nested folder's parent_folder_id for breadcrumb navigation
+    parent_listing = main.list_documents(folder_id=parent_folder["id"], user="member")
+    child_info = next((f for f in parent_listing["folders"] if f["id"] == nested_folder["id"]), None)
+    assert child_info is not None
+    assert child_info["parent_folder_id"] == parent_folder["id"]
+
+    # Top-level folder listing reports parent_folder_id as None
+    root_parent_info = next((f for f in root_listing["folders"] if f["id"] == parent_folder["id"]), None)
+    assert root_parent_info is not None
+    assert root_parent_info["parent_folder_id"] is None
+
+
+def test_tag_add_and_remove_persists(document_state):
+    doc = main.upload_document(upload("memo.txt", b"Memo content"), None, "", "member")
+    doc_id = doc["id"]
+    assert doc["tags"] == []
+
+    # Add tags to the document via API
+    res_add = main.update_document_tags(doc_id, tags="urgent, review", user="member")
+    assert sorted(res_add["tags"]) == ["review", "urgent"]
+
+    # Fetch document again as if it were a fresh request: tag is present
+    fresh_doc = main.get_document(doc_id, user="member")
+    assert sorted(fresh_doc["tags"]) == ["review", "urgent"]
+
+    # Folder listing also reflects the persisted tags
+    fresh_listing = main.list_documents(folder_id=None, user="member")
+    listed_doc = next(d for d in fresh_listing["documents"] if d["id"] == doc_id)
+    assert sorted(listed_doc["tags"]) == ["review", "urgent"]
+
+    # Confirm tags are in actual document_tags table
+    with document_state.connect() as conn:
+        db_tags = [r[0] for r in conn.execute("SELECT tag FROM document_tags WHERE document_id = ? ORDER BY tag", (doc_id,)).fetchall()]
+    assert db_tags == ["review", "urgent"]
+
+    # Remove the tags via API
+    res_remove = main.update_document_tags(doc_id, tags="", user="member")
+    assert res_remove["tags"] == []
+
+    # Subsequent fetch confirms tag is no longer present
+    subsequent_doc = main.get_document(doc_id, user="member")
+    assert subsequent_doc["tags"] == []
+
+    subsequent_listing = main.list_documents(folder_id=None, user="member")
+    subsequent_listed_doc = next(d for d in subsequent_listing["documents"] if d["id"] == doc_id)
+    assert subsequent_listed_doc["tags"] == []
+
+    # Confirm document_tags table no longer has rows for this document
+    with document_state.connect() as conn:
+        remaining_db_tags = conn.execute("SELECT tag FROM document_tags WHERE document_id = ?", (doc_id,)).fetchall()
+    assert remaining_db_tags == []
+
+
+def test_change_note_recorded_and_old_version_downloadable(document_state):
+    v1_content = b"Original contract draft version 1"
+    v2_content = b"Revised contract draft version 2 with updated liability section"
+    note = "Updated liability cap and payment schedule"
+
+    doc = main.upload_document(upload("agreement.txt", v1_content), None, "", "member")
+    doc_id = doc["id"]
+
+    v2_doc = main.upload_document_version(doc_id, upload("agreement.txt", v2_content), change_note=note, user="member")
+    assert v2_doc["current_version"] == 2
+
+    # Change note is retrievable via version history endpoint
+    doc_details = main.get_document(doc_id, user="member")
+    assert "versions" in doc_details
+    versions = doc_details["versions"]
+    assert len(versions) == 2
+    v2_record = next(v for v in versions if v["version_number"] == 2)
+    assert v2_record["change_note"] == note
+    v1_record = next(v for v in versions if v["version_number"] == 1)
+    assert v1_record["change_note"] is None
+
+    # OLD version can still be downloaded by its specific version id/number with original content intact
+    download_old = main.download_document(doc_id, version=1, user="member")
+    assert download_old.status_code == 200
+    downloaded_old_bytes = Path(download_old.path).read_bytes()
+    assert downloaded_old_bytes == v1_content
+    assert downloaded_old_bytes != v2_content
+
+    # Current version download returns new content
+    download_current = main.download_document(doc_id, user="member")
+    assert download_current.status_code == 200
+    assert Path(download_current.path).read_bytes() == v2_content
+
+    # Specific version 2 download returns new content
+    download_v2 = main.download_document(doc_id, version=2, user="member")
+    assert download_v2.status_code == 200
+    assert Path(download_v2.path).read_bytes() == v2_content
+
+
 # --- Restrictions & Size Limit Tests ---
 
 def test_upload_allowed_type_under_50mb_succeeds(document_state):

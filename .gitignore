@@ -5,7 +5,6 @@ __pycache__/
 .env
 storage/
 logs/
-# Downloaded Whisper/Hugging Face model weights are kept outside Git.
 models/
 *.db
 *.m4a
