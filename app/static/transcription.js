@@ -1,0 +1,86 @@
+const $ = (id) => document.getElementById(id);
+
+async function request(url, options = {}) {
+  const response = await fetch(url, options);
+  if (!response.ok) throw new Error((await response.json()).detail || response.statusText);
+  return response.json();
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+}
+
+async function loadUser() {
+  try {
+    const me = await request('/api/me');
+    if ($('userName')) {
+      $('userName').textContent = me.name || me.username;
+      $('userName').title = `${me.username}${me.email ? ' · ' + me.email : ''}`;
+    }
+  } catch (error) {
+    if (error.message.includes('Authentication')) location.href = '/';
+  }
+}
+
+async function loadJobs() {
+  try {
+    const jobs = await request('/api/jobs');
+    const filtered = jobs.filter(job => job.status !== 'deleted');
+    $('jobs').innerHTML = filtered.length
+      ? filtered.map(job => `<article class="job">
+          <div>
+            <h3>${escapeHtml(job.filename)}</h3>
+            <div class="meta">${job.status === 'waiting' ? `Queue position ${job.queue_position}` : job.status} · requested ${job.requested_model} · used ${job.selected_model || 'pending'}</div>
+            <div class="bar"><i style="width:${job.progress}%"></i></div>
+            <div class="meta">${Math.round(job.progress)}% ${job.error ? '· ' + escapeHtml(job.error) : ''}</div>
+          </div>
+          <div>
+            <span class="status ${job.status}">${job.status}</span>
+            <div class="meta">${job.eta_seconds ? 'ETA ' + Math.round(job.eta_seconds) + 's' : ''}</div>
+          </div>
+          <div class="downloads">
+            ${job.status === 'done' ? job.formats.map(format => `<a href="/api/jobs/${job.id}/outputs/${job.filename.replace(/\.[^.]+$/, '')}${format === 'txt_timestamps' ? '_timestamps.txt' : '.' + format}">${format}</a>`).join('') : ''}
+            <button onclick="removeJob('${job.id}')" class="quiet">Delete</button>
+          </div>
+        </article>`).join('')
+      : '<p class="meta">No active jobs in the queue.</p>';
+  } catch (error) {
+    if (error.message.includes('Authentication')) location.href = '/';
+  }
+}
+
+$('logout').onclick = async () => {
+  await fetch('/api/logout', {method: 'POST'});
+  location.href = '/';
+};
+
+$('drop').onclick = () => $('file').click();
+
+$('upload').onclick = async () => {
+  const file = $('file').files[0];
+  if (!file) return $('uploadError').textContent = 'Choose a recording first.';
+  const body = new FormData();
+  body.append('file', file);
+  body.append('model', $('model').value);
+  body.append('language', $('language').value);
+  body.append('initial_prompt', $('prompt').value);
+  body.append('formats', $('formats').value);
+  try {
+    await request('/api/jobs', {method: 'POST', body});
+    $('uploadError').textContent = '';
+    $('file').value = '';
+    loadJobs();
+  } catch (error) {
+    $('uploadError').textContent = error.message;
+  }
+};
+
+async function removeJob(id) {
+  await request('/api/jobs/' + id, {method: 'DELETE'});
+  loadJobs();
+}
+
+$('refresh').onclick = loadJobs;
+setInterval(loadJobs, 3000);
+loadUser();
+loadJobs();

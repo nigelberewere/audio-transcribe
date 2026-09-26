@@ -31,7 +31,10 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL DEFAULT 'user',
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
-    created_by TEXT
+    created_by TEXT,
+    first_name TEXT NOT NULL DEFAULT '',
+    surname TEXT NOT NULL DEFAULT '',
+    email TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,6 +63,7 @@ CREATE TABLE IF NOT EXISTS documents (
     mime_type TEXT,
     current_version INTEGER NOT NULL DEFAULT 1,
     deleted INTEGER NOT NULL DEFAULT 0,
+    source_document_ids TEXT,
     FOREIGN KEY (folder_id) REFERENCES folders(id)
 );
 CREATE TABLE IF NOT EXISTS document_versions (
@@ -97,10 +101,16 @@ class Database:
                 "active": "ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1",
                 "created_at": "ALTER TABLE users ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
                 "created_by": "ALTER TABLE users ADD COLUMN created_by TEXT",
+                "first_name": "ALTER TABLE users ADD COLUMN first_name TEXT NOT NULL DEFAULT ''",
+                "surname": "ALTER TABLE users ADD COLUMN surname TEXT NOT NULL DEFAULT ''",
+                "email": "ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''",
             }
             for name, statement in migrations.items():
                 if name not in columns:
                     connection.execute(statement)
+            doc_columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)")}
+            if "source_document_ids" not in doc_columns:
+                connection.execute("ALTER TABLE documents ADD COLUMN source_document_ids TEXT")
 
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30)
@@ -127,14 +137,23 @@ class Database:
 
     def list_users(self) -> list[dict[str, Any]]:
         with self.connect() as connection:
-            rows = connection.execute("SELECT username, role, active, created_at, created_by FROM users ORDER BY username").fetchall()
+            rows = connection.execute("SELECT username, first_name, surname, email, role, active, created_at, created_by FROM users ORDER BY username").fetchall()
         return [dict(row) for row in rows]
 
-    def create_user(self, username: str, password_hash: str, role: str, created_by: str | None) -> None:
+    def create_user(
+        self,
+        username: str,
+        password_hash: str,
+        role: str = "user",
+        created_by: str | None = None,
+        first_name: str = "",
+        surname: str = "",
+        email: str = "",
+    ) -> None:
         with self.connect() as connection:
             connection.execute(
-                "INSERT INTO users (username, password_hash, role, active, created_at, created_by) VALUES (?, ?, ?, 1, ?, ?)",
-                (username, password_hash, role, now(), created_by),
+                "INSERT INTO users (username, password_hash, role, active, created_at, created_by, first_name, surname, email) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)",
+                (username, password_hash, role, now(), created_by, first_name.strip(), surname.strip(), email.strip().lower()),
             )
 
     def add_audit_log(self, actor: str, action: str, target: str | None, details: str | None) -> None:
@@ -167,6 +186,10 @@ class Database:
         with self.connect() as connection:
             connection.execute(f"UPDATE users SET {assignments} WHERE username = ?", [*fields.values(), username])
 
+    def delete_user(self, username: str) -> None:
+        with self.connect() as connection:
+            connection.execute("DELETE FROM users WHERE username = ?", (username,))
+
     def count_users(self) -> int:
         with self.connect() as connection:
             return int(connection.execute("SELECT COUNT(*) FROM users").fetchone()[0])
@@ -197,9 +220,38 @@ class Database:
         return dict(row) if row else None
 
     def create_document(self, document: dict[str, Any], version: dict[str, Any], tags: list[str]) -> None:
+        source_ids = document.get("source_document_ids")
+        if isinstance(source_ids, (list, tuple)):
+            source_ids = json.dumps(source_ids)
         with self.connect() as connection:
-            connection.execute("INSERT INTO documents (id, filename, storage_path, folder_id, uploaded_by, uploaded_at, file_size, mime_type, current_version, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", tuple(document.values()))
-            connection.execute("INSERT INTO document_versions (id, document_id, version_number, storage_path, uploaded_by, uploaded_at, change_note) VALUES (?, ?, ?, ?, ?, ?, ?)", tuple(version.values()))
+            connection.execute(
+                "INSERT INTO documents (id, filename, storage_path, folder_id, uploaded_by, uploaded_at, file_size, mime_type, current_version, deleted, source_document_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    document["id"],
+                    document["filename"],
+                    document["storage_path"],
+                    document.get("folder_id"),
+                    document["uploaded_by"],
+                    document["uploaded_at"],
+                    document["file_size"],
+                    document.get("mime_type"),
+                    document.get("current_version", 1),
+                    document.get("deleted", 0),
+                    source_ids,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO document_versions (id, document_id, version_number, storage_path, uploaded_by, uploaded_at, change_note) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    version["id"],
+                    version["document_id"],
+                    version["version_number"],
+                    version["storage_path"],
+                    version["uploaded_by"],
+                    version["uploaded_at"],
+                    version.get("change_note"),
+                ),
+            )
             connection.executemany("INSERT INTO document_tags (document_id, tag) VALUES (?, ?)", [(document["id"], tag) for tag in tags])
 
     def get_document(self, document_id: str, include_deleted: bool = False) -> dict[str, Any] | None:
@@ -259,6 +311,13 @@ class Database:
         result = dict(row)
         result["tags"] = [tag for tag in (result.pop("tags") or "").split(",") if tag]
         result["deleted"] = bool(result["deleted"])
+        if result.get("source_document_ids"):
+            try:
+                result["source_document_ids"] = json.loads(result["source_document_ids"])
+            except Exception:
+                pass
+        else:
+            result["source_document_ids"] = None
         return result
 
     def list_jobs(self) -> list[dict[str, Any]]:

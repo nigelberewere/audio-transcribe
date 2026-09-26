@@ -1,6 +1,155 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Documents | Zingsa Files Center</title><link rel="icon" href="/static/assets/logo.jpg"><link rel="stylesheet" href="/static/style.css"></head>
-<body><main class="shell"><header class="brand-card"><div class="brand-lockup"><img class="brand-logo" src="/static/assets/logo.jpg" alt="ZINGSA logo"><div><div class="brand-name">Zingsa Files Center</div><div class="brand-subtitle">Documents</div></div></div><nav><a href="/">Transcription</a><a href="/documents">Documents</a><button id="logout" class="quiet">Sign out</button></nav></header>
-<section class="section-head"><div><p class="eyebrow">DOCUMENT REPOSITORY</p><h1>Documents</h1><p id="breadcrumb" class="meta">All documents</p></div><div class="document-actions"><button id="newFolder">New folder</button><button id="deletedFiles" class="quiet" hidden>Deleted files</button></div></section>
-<section class="document-layout"><aside class="panel"><h2>Folders</h2><button class="folder-link active" data-folder="">All documents</button><div id="folders"></div></aside><section><section id="drop" class="panel drop document-drop"><strong>Drop files here to upload</strong><span>Any file type</span><input id="file" type="file"></section><p id="message" class="error"></p><section id="documents" class="document-list"></section></section></section></main><dialog id="versions"><div id="versionContent"></div><form method="dialog"><button class="quiet">Close</button></form></dialog><script src="/static/documents.js"></script></body></html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Documents | Zingsa Files Center</title>
+  <link rel="icon" href="/static/assets/logo.jpg">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="shell">
+  <header class="brand-card">
+    <div class="brand-lockup">
+      <img class="brand-logo" src="/static/assets/logo.jpg" alt="ZINGSA logo">
+      <div>
+        <div class="brand-name">Zingsa Files Center</div>
+        <div class="brand-subtitle">Documents</div>
+      </div>
+    </div>
+    <nav>
+      <a href="/home">Home</a>
+      <a href="/transcription">Transcription</a>
+      <a href="/documents" class="nav-active">Documents</a>
+      <span id="userName" class="user-name"></span>
+      <button id="logout" class="quiet">Sign out</button>
+    </nav>
+  </header>
+
+  <section class="section-head">
+    <div>
+      <p class="eyebrow">DOCUMENT REPOSITORY</p>
+      <h1>Documents</h1>
+      <p id="breadcrumb" class="meta">All documents</p>
+    </div>
+    <div class="document-actions">
+      <button id="toolsBtn" class="quiet" disabled>Tools</button>
+      <button id="newFolder">New folder</button>
+      <button id="deletedFiles" class="quiet" hidden>Deleted files</button>
+    </div>
+  </section>
+
+  <section class="document-layout">
+    <aside class="panel">
+      <h2>Folders</h2>
+      <button class="folder-link active" data-folder="">All documents</button>
+      <div id="folders"></div>
+    </aside>
+
+    <section>
+      <section id="drop" class="panel drop document-drop">
+        <strong>Drop files here to upload</strong>
+        <span>PDF, Word, Excel, PowerPoint, text, and image files, up to 50MB</span>
+        <input id="file" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf,.odt,.ods,.odp,.jpg,.jpeg,.png">
+      </section>
+
+      <div class="document-select-bar" id="selectBar" hidden>
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+          <input type="checkbox" id="selectAllCheckbox" class="doc-checkbox">
+          <span>Select all in folder</span>
+        </label>
+        <span id="selectionSummary">0 selected</span>
+      </div>
+
+      <p id="message" class="error"></p>
+      <section id="documents" class="document-list"></section>
+    </section>
+  </section>
+</main>
+
+<dialog id="versions">
+  <div id="versionContent"></div>
+  <form method="dialog"><button class="quiet">Close</button></form>
+</dialog>
+
+<dialog id="toolsDialog">
+  <div>
+    <p class="eyebrow">DOCUMENT UTILITIES</p>
+    <h2>PDF &amp; File Tools</h2>
+    <p id="toolsSelectedSummary" class="meta" style="margin-bottom: 14px;"></p>
+  </div>
+  <div id="toolsError" class="error" style="margin-bottom: 12px;"></div>
+
+  <!-- 1. Merge -->
+  <div id="toolMergeBox" class="tool-box">
+    <div class="tool-box-head">
+      <h3>Merge PDFs</h3>
+      <span id="toolMergeBadge" class="tool-badge">2+ PDFs</span>
+    </div>
+    <p class="meta">Combine the selected PDF documents into one single PDF in the current folder.</p>
+    <div id="toolMergeForm" class="admin-form" style="gap: 8px;">
+      <label>Combined filename (optional)
+        <input id="mergeOutputName" placeholder="e.g. combined_documents.pdf">
+      </label>
+      <button type="button" id="executeMergeBtn">Merge PDFs</button>
+    </div>
+    <p id="toolMergeNotice" class="tool-notice" hidden></p>
+  </div>
+
+  <!-- 2. Split -->
+  <div id="toolSplitBox" class="tool-box">
+    <div class="tool-box-head">
+      <h3>Split PDF</h3>
+      <span id="toolSplitBadge" class="tool-badge">1 PDF</span>
+    </div>
+    <p class="meta">Extract pages or split into individual single-page documents.</p>
+    <div id="toolSplitForm" class="admin-form" style="gap: 8px;">
+      <label>Page range (leave empty to split into single pages)
+        <input id="splitPageRanges" placeholder="e.g. 1-2, 3-5 or leave empty for all pages">
+      </label>
+      <button type="button" id="executeSplitBtn">Split PDF</button>
+    </div>
+    <p id="toolSplitNotice" class="tool-notice" hidden></p>
+  </div>
+
+  <!-- 3. Watermark -->
+  <div id="toolWatermarkBox" class="tool-box">
+    <div class="tool-box-head">
+      <h3>Watermark PDF</h3>
+      <span id="toolWatermarkBadge" class="tool-badge">1+ PDFs</span>
+    </div>
+    <p class="meta">Overlay custom text across every page of the selected PDF(s).</p>
+    <div id="toolWatermarkForm" class="admin-form" style="gap: 8px;">
+      <label>Watermark text
+        <input id="watermarkText" placeholder="e.g. CONFIDENTIAL, DRAFT, FOR INTERNAL USE ONLY">
+      </label>
+      <button type="button" id="executeWatermarkBtn">Apply Watermark</button>
+    </div>
+    <p id="toolWatermarkNotice" class="tool-notice" hidden></p>
+  </div>
+
+  <!-- 4. Convert -->
+  <div id="toolConvertBox" class="tool-box">
+    <div class="tool-box-head">
+      <h3>Convert File</h3>
+      <span id="toolConvertBadge" class="tool-badge">1 File</span>
+    </div>
+    <p class="meta">Convert file format locally (DOCX &harr; PDF, Image &rarr; PDF).</p>
+    <div id="toolConvertForm" class="admin-form" style="gap: 8px;">
+      <label>Target format
+        <select id="convertTargetSelect"></select>
+      </label>
+      <p id="convertNoticeMeta" class="meta" style="font-size: 12px; margin: 0;" hidden>Note: Text extraction from PDF to Word is best-effort; exact layout and formatting may not be preserved.</p>
+      <button type="button" id="executeConvertBtn">Convert File</button>
+    </div>
+    <p id="toolConvertNotice" class="tool-notice" hidden></p>
+  </div>
+
+  <div class="dialog-foot">
+    <button type="button" id="closeToolsBtn" class="quiet">Close</button>
+  </div>
+</dialog>
+
+<script src="/static/documents.js?v=2"></script>
+</body>
+</html>

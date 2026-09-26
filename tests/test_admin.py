@@ -70,7 +70,16 @@ def test_bootstrap_uses_environment_configured_admin(tmp_path, monkeypatch):
 
 
 def test_admin_actions_and_failed_login_create_exact_audit_rows(admin_state):
-    assert main.create_admin_user("new-user", "new-pass", "user", "owner") == {"ok": True}
+    assert main.create_admin_user(
+        username="new-user",
+        password="new-pass",
+        confirm_password="new-pass",
+        role="user",
+        first_name="New",
+        surname="User",
+        email="newuser@example.com",
+        admin="owner",
+    ) == {"ok": True}
     assert main.update_admin_user("new-user", role="admin", active=None, admin="owner") == {"ok": True}
     assert main.update_admin_user("new-user", role=None, active=0, admin="owner") == {"ok": True}
     with pytest.raises(HTTPException):
@@ -130,3 +139,148 @@ def test_password_reset_requires_admin_and_valid_length(admin_state):
     with pytest.raises(HTTPException) as error:
         main.reset_user_password("member", "replacement-pass", "different-pass", "owner")
     assert error.value.status_code == 400
+
+
+def test_create_user_requires_name_surname_and_email(admin_state):
+    with pytest.raises(HTTPException) as error:
+        main.create_admin_user(
+            username="jsmith",
+            password="password123",
+            confirm_password="password123",
+            role="user",
+            first_name="",
+            surname="Smith",
+            email="jsmith@example.com",
+            admin="owner",
+        )
+    assert error.value.status_code == 400
+    assert "Name and surname are required" in error.value.detail
+
+    with pytest.raises(HTTPException) as error:
+        main.create_admin_user(
+            username="jsmith",
+            password="password123",
+            confirm_password="password123",
+            role="user",
+            first_name="Jane",
+            surname="",
+            email="jsmith@example.com",
+            admin="owner",
+        )
+    assert error.value.status_code == 400
+    assert "Name and surname are required" in error.value.detail
+
+    with pytest.raises(HTTPException) as error:
+        main.create_admin_user(
+            username="jsmith",
+            password="password123",
+            confirm_password="password123",
+            role="user",
+            first_name="Jane",
+            surname="Smith",
+            email="invalid-email",
+            admin="owner",
+        )
+    assert error.value.status_code == 400
+    assert "Valid email address is required" in error.value.detail
+
+
+def test_user_creation_stores_name_and_email_and_lists_them(admin_state):
+    result = main.create_admin_user(
+        username="jsmith",
+        password="password123",
+        confirm_password="password123",
+        role="user",
+        first_name="Jane",
+        surname="Smith",
+        email="jsmith@zingsa.ac.zw",
+        admin="owner",
+    )
+    assert result == {"ok": True}
+
+    user = admin_state.get_user("jsmith")
+    assert user["first_name"] == "Jane"
+    assert user["surname"] == "Smith"
+    assert user["email"] == "jsmith@zingsa.ac.zw"
+
+    users = main.admin_users("owner")
+    found = next((u for u in users if u["username"] == "jsmith"), None)
+    assert found is not None
+    assert found["first_name"] == "Jane"
+    assert found["surname"] == "Smith"
+    assert found["email"] == "jsmith@zingsa.ac.zw"
+
+
+def test_me_endpoint_returns_user_display_name_and_email(admin_state):
+    admin_state.create_user(
+        username="nigel",
+        password_hash=hash_password("nigel-pass"),
+        role="user",
+        created_by="owner",
+        first_name="Nigel",
+        surname="Berewere",
+        email="nigel@zingsa.ac.zw",
+    )
+    data = main.me("nigel")
+    assert data["username"] == "nigel"
+    assert data["first_name"] == "Nigel"
+    assert data["surname"] == "Berewere"
+    assert data["name"] == "Nigel Berewere"
+    assert data["email"] == "nigel@zingsa.ac.zw"
+    assert data["role"] == "user"
+
+    # User with no first_name / surname falls back to username
+    fallback = main.me("owner")
+    assert fallback["name"] == "owner"
+
+
+def test_page_routes_and_redirects(admin_state):
+    # Unauthenticated user visiting /, /home, /transcription, /documents
+    assert main.index(None).status_code == 200
+    assert main.home_page(None).status_code == 303
+    assert main.transcription_page(None).status_code == 303
+    assert main.documents_page(None).status_code == 303
+
+    # Authenticate user session
+    res = main.login("member", "member-pass")
+    cookie = res.headers["set-cookie"]
+    token = cookie.split("session=", 1)[1].split(";", 1)[0]
+
+    # Authenticated user visiting / gets redirected to /home
+    root_resp = main.index(token)
+    assert root_resp.status_code == 303
+    assert root_resp.headers["location"] == "/home"
+
+    # Authenticated user can load /home, /transcription, /documents
+    assert main.home_page(token).status_code == 200
+    assert main.transcription_page(token).status_code == 200
+    assert main.documents_page(token).status_code == 200
+
+
+def test_admin_cannot_delete_self(admin_state):
+    with pytest.raises(HTTPException) as error:
+        main.delete_admin_user("owner", admin="owner")
+    assert error.value.status_code == 400
+    assert "Cannot delete your own administrator account" in error.value.detail
+
+
+def test_cannot_delete_last_active_admin(admin_state):
+    admin_state.create_user("second-admin", hash_password("pass"), "admin", "owner")
+    # owner can delete second-admin because owner remains
+    assert main.delete_admin_user("second-admin", admin="owner") == {"ok": True}
+    assert admin_state.get_user("second-admin") is None
+
+
+def test_admin_can_delete_user(admin_state):
+    assert admin_state.get_user("member") is not None
+    assert main.delete_admin_user("member", admin="owner") == {"ok": True}
+    assert admin_state.get_user("member") is None
+
+    with admin_state.connect() as connection:
+        row = connection.execute(
+            "SELECT actor, action, target, details FROM audit_log WHERE action = 'user_deleted'"
+        ).fetchone()
+    assert tuple(row) == ("owner", "user_deleted", "member", "role: user")
+
+
+

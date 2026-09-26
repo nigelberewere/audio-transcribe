@@ -1,4 +1,76 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Administration | Zingsa Files Center</title><link rel="stylesheet" href="/static/style.css"></head>
-<body><main class="shell"><header class="brand-card"><div><div class="brand-name">Zingsa Files Center</div><div class="brand-subtitle">Administration</div></div><button id="logout" class="quiet">Sign out</button></header><section class="section-head"><div><p class="eyebrow">PLATFORM OVERVIEW</p><h1>Administration</h1></div></section><section id="stats" class="stats"></section><section class="admin-grid"><section class="panel"><p class="eyebrow">NEW ACCOUNT</p><h2>Create account</h2><form id="createUserForm" class="admin-form"><label>Username<input name="username" required></label><label>Password<input name="password" type="password" required></label><label>Role<select name="role"><option value="user">User</option><option value="admin">Admin</option></select></label><button>Create account</button><p id="userError" class="error"></p></form></section><section class="panel"><p class="eyebrow">ACCESS CONTROL</p><h2>Accounts</h2><div class="table-wrap"><table><thead><tr><th>Username</th><th>Role</th><th>Status</th><th>Created</th><th>Created by</th><th>Actions</th></tr></thead><tbody id="users"></tbody></table></div></section></section><section class="panel audit-panel"><div class="audit-heading"><div><p class="eyebrow">SECURITY RECORD</p><h2>Audit log</h2></div><span class="read-only">Read only</span></div><div class="audit-filters"><label>Actor<select id="auditActor"><option value="">All actors</option></select></label><label>Action<select id="auditAction"><option value="">All actions</option></select></label></div><div class="table-wrap"><table><thead><tr><th>Timestamp</th><th>Actor</th><th>Action</th><th>Target</th><th>Details</th></tr></thead><tbody id="auditLog"></tbody></table></div><div class="audit-more"><button id="loadMoreAudit" class="quiet" hidden>Load more</button></div></section><dialog id="resetPasswordDialog"><form id="resetPasswordForm" method="dialog"><p class="eyebrow">ACCOUNT SECURITY</p><h2>Reset password</h2><p id="resetPasswordUser" class="meta"></p><label>New password<input name="new_password" type="password" minlength="8" autocomplete="new-password" required></label><p id="resetPasswordError" class="error"></p><div class="dialog-actions"><button type="button" id="cancelReset" class="quiet">Cancel</button><button type="submit">Save new password</button></div></form></dialog></main><script src="/static/admin.js?v=2"></script></body></html>
+<body>
+<main class="shell">
+  <header class="brand-card"><div class="brand-lockup"><img class="brand-logo" src="/static/assets/logo.jpg" alt="ZINGSA logo"><div><div class="brand-name">Zingsa Files Center</div><div class="brand-subtitle">Administration</div></div></div><nav><a href="/home">Home</a><a href="/transcription">Transcription</a><a href="/documents">Documents</a><span id="userName" class="user-name"></span><button id="logout" class="quiet">Sign out</button></nav></header>
+  <section class="section-head"><div><p class="eyebrow">PLATFORM OVERVIEW</p><h1>Administration</h1></div></section>
+  <section id="stats" class="stats"></section>
+  <section class="admin-toolbar"><p class="eyebrow">ACCESS CONTROL</p><button id="addUser">Add new user</button></section>
+  <section class="panel accounts-panel"><div class="accounts-heading"><div><p class="eyebrow">DIRECTORY</p><h2>Accounts</h2></div></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th>Created</th><th>Created by</th><th>Actions</th></tr></thead><tbody id="users"></tbody></table></div></section>
+  <section class="panel audit-panel"><div class="audit-heading"><div><p class="eyebrow">SECURITY RECORD</p><h2>Audit log</h2></div><span class="read-only">Read only</span></div><button id="auditFilterToggle" class="quiet filter-button">Filters</button><div id="auditFilters" class="audit-filters" hidden><label>Actor<select id="auditActor"><option value="">All actors</option></select></label><label>Action<select id="auditAction"><option value="">All actions</option></select></label></div><div class="table-wrap"><table><thead><tr><th>Timestamp</th><th>Actor</th><th>Action</th><th>Target</th><th>Details</th></tr></thead><tbody id="auditLog"></tbody></table></div><div class="audit-more"><button id="loadMoreAudit" class="quiet" hidden>Load more</button></div></section>
+</main>
+<dialog id="createUserDialog"><form id="createUserForm" method="dialog"><p class="eyebrow">NEW ACCOUNT</p><h2>Create account</h2><label>Username<input name="username" autocomplete="username" placeholder="e.g. jdoe" required></label><div class="form-grid-2"><label>First name<input name="first_name" placeholder="e.g. John" required></label><label>Surname<input name="surname" placeholder="e.g. Doe" required></label></div><label>Email address<input name="email" type="email" placeholder="e.g. jdoe@example.com" required></label><label>Role<select name="role"><option value="user">User</option><option value="admin">Admin</option></select></label><label>Password<input name="password" type="password" minlength="8" autocomplete="new-password" required></label><label>Confirm password<input name="confirm_password" type="password" minlength="8" autocomplete="new-password" required></label><p id="userError" class="error"></p><div class="dialog-actions"><button type="button" id="cancelCreateUser" class="quiet">Cancel</button><button type="submit">Create account</button></div></form></dialog>
+<dialog id="resetPasswordDialog"><form id="resetPasswordForm" method="dialog"><p class="eyebrow">ACCOUNT SECURITY</p><h2>Reset password</h2><p id="resetPasswordUser" class="meta"></p><label>New password<input name="new_password" type="password" minlength="8" autocomplete="new-password" required></label><label>Confirm password<input name="confirm_password" type="password" minlength="8" autocomplete="new-password" required></label><p id="resetPasswordError" class="error"></p><div class="dialog-actions"><button type="button" id="cancelReset" class="quiet">Cancel</button><button type="submit">Save new password</button></div></form></dialog>
+<dialog id="manageUserDialog">
+  <div class="manage-user-header">
+    <p class="eyebrow">ACCOUNT MANAGEMENT</p>
+    <h2 id="manageUserHeading">Manage Account</h2>
+    <p id="manageUserMeta" class="meta"></p>
+  </div>
+  <form id="manageDetailsForm" class="modal-section">
+    <h3>Profile & Status</h3>
+    <div class="form-grid-2">
+      <label>First name<input id="manageFirstName" name="first_name" required></label>
+      <label>Surname<input id="manageSurname" name="surname" required></label>
+    </div>
+    <label>Email address<input id="manageEmail" name="email" type="email" required></label>
+    <div class="form-grid-2">
+      <label>Role
+        <select id="manageRole" name="role">
+          <option value="user">User</option>
+          <option value="admin">Admin</option>
+        </select>
+      </label>
+      <div class="switch-field">
+        <span>Account Status</span>
+        <label class="switch" style="margin-top: 8px;">
+          <input type="checkbox" id="manageActive" name="active">
+          <span id="manageActiveLabel">Active</span>
+        </label>
+      </div>
+    </div>
+    <p id="manageDetailsMessage" class="feedback-msg"></p>
+    <div class="dialog-actions">
+      <button type="submit">Save Changes</button>
+    </div>
+  </form>
+  <form id="managePasswordForm" class="modal-section">
+    <h3>Reset Password</h3>
+    <p class="meta" style="margin: 0 0 10px;">Set a new password for this user (minimum 8 characters).</p>
+    <div class="form-grid-2">
+      <label>New password<input id="manageNewPassword" name="password" type="password" minlength="8" autocomplete="new-password" placeholder="Enter new password" required></label>
+      <label>Confirm password<input id="manageConfirmPassword" name="confirm_password" type="password" minlength="8" autocomplete="new-password" placeholder="Confirm new password" required></label>
+    </div>
+    <p id="managePasswordMessage" class="feedback-msg"></p>
+    <div class="dialog-actions">
+      <button type="submit" class="quiet">Update Password</button>
+    </div>
+  </form>
+  <div class="modal-section danger-zone-section">
+    <h3>Danger Zone</h3>
+    <div class="danger-zone">
+      <div>
+        <strong>Delete account</strong>
+        <p class="meta" style="margin: 4px 0 0;">Permanently remove this user and terminate all active sessions.</p>
+      </div>
+      <button type="button" id="deleteUserBtn" class="danger-button">Delete Account</button>
+    </div>
+    <p id="deleteUserMessage" class="feedback-msg"></p>
+  </div>
+  <div class="dialog-foot">
+    <button type="button" id="closeManageUser" class="quiet">Done</button>
+  </div>
+</dialog>
+<script src="/static/admin.js?v=4"></script>
+</body></html>

@@ -42,9 +42,7 @@ class TranscriptionWorker:
                     self.process(job)
                 except Exception as exc:
                     LOGGER.exception("Job %s failed", job["id"])
-                    current = self.database.get_job(job["id"])
-                    if not current or current["status"] != "failed":
-                        self.database.update_job(job["id"], status="failed", error=str(exc))
+                    self.database.update_job(job["id"], status="failed", error=str(exc))
             else:
                 self.stop_event.wait(1)
 
@@ -62,15 +60,9 @@ class TranscriptionWorker:
         self._transcribe(job, model, wav_path, checkpoint, segments)
         segments = json.loads(checkpoint.read_text(encoding="utf-8"))
         if job.get("diarization"):
-            self.database.update_job(job["id"], status="processing", error="Diarization started")
-            try:
-                speaker_turns = diarize_audio(wav_path)
-                segments = assign_speakers_to_segments(segments, speaker_turns)
-            except Exception as exc:
-                self.database.update_job(job["id"], status="failed", error=f"Diarization failed: {exc}")
-                raise
+            speaker_turns = diarize_audio(wav_path)
+            segments = assign_speakers_to_segments(segments, speaker_turns)
             checkpoint.write_text(json.dumps(segments, indent=2), encoding="utf-8")
-            self.database.update_job(job["id"], error=None)
         write_outputs(job, segments, job_root / "outputs")
         self.database.update_job(job["id"], status="done", progress=100, elapsed_seconds=0, eta_seconds=0, completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
