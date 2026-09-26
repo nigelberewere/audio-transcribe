@@ -22,6 +22,18 @@ async function loadUser() {
   }
 }
 
+function formatEta(seconds) {
+  if (!seconds || seconds <= 0) return '';
+  const total = Math.round(seconds);
+  if (total < 60) return `ETA ${total}s`;
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  if (m < 60) return s > 0 ? `ETA ${m}m ${s}s` : `ETA ${m}m`;
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return remM > 0 ? `ETA ${h}h ${remM}m` : `ETA ${h}h`;
+}
+
 async function loadJobs() {
   try {
     const jobs = await request('/api/jobs');
@@ -35,9 +47,9 @@ async function loadJobs() {
             <div class="bar"><i style="width:${job.progress}%"></i></div>
             <div class="meta">${Math.round(job.progress)}% ${job.error ? '· ' + escapeHtml(job.error) : ''}</div>
           </div>
-          <div>
+          <div class="job-status-col">
             <span class="status ${job.status}">${job.status}</span>
-            <div class="meta">${job.eta_seconds ? 'ETA ' + Math.round(job.eta_seconds) + 's' : ''}</div>
+            ${job.eta_seconds ? `<span class="job-eta meta" title="${Math.round(job.eta_seconds)}s remaining"><svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>${formatEta(job.eta_seconds)}</span>` : ''}
           </div>
           <div class="downloads">
             ${job.status === 'done' ? job.formats.map(format => `<a href="/api/jobs/${job.id}/outputs/${job.filename.replace(/\.[^.]+$/, '')}${format === 'txt_timestamps' ? '_timestamps.txt' : '.' + format}">${format}</a>`).join('') : ''}
