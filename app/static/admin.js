@@ -115,7 +115,7 @@ async function loadAdmin() {
     </tr>`;
   }).join('');
 
-  await loadAudit();
+  await Promise.all([loadAudit(), loadAdminSettings()]);
 }
 
 function openManageUser(encodedUsername) {
@@ -311,6 +311,119 @@ $('auditAction')?.addEventListener('change', (event) => {
   loadAudit();
 });
 $('loadMoreAudit')?.addEventListener('click', () => loadAudit(false));
+
+async function loadAdminSettings() {
+  if (!$('settingsForm')) return;
+  try {
+    const settings = await request('/api/admin/settings');
+    const badge = $('hfBadge');
+    const statusText = $('hfCurrentStatus');
+    const clearBtn = $('clearHfTokenBtn');
+
+    if (settings.has_token) {
+      if (badge) {
+        badge.textContent = settings.available ? 'Configured & Ready' : 'Token Configured';
+        badge.className = 'status-badge active';
+      }
+      if (statusText) {
+        statusText.innerHTML = `Active token: <code>${escapeHtml(settings.masked_token)}</code>${settings.message && !settings.available ? ` &middot; <span style="color:var(--danger);">${escapeHtml(settings.message)}</span>` : ''}`;
+      }
+      if (clearBtn) clearBtn.hidden = false;
+    } else {
+      if (badge) {
+        badge.textContent = 'Not Configured';
+        badge.className = 'status-badge inactive';
+      }
+      if (statusText) {
+        statusText.textContent = 'No token configured. Speaker diarization option is currently hidden from users.';
+      }
+      if (clearBtn) clearBtn.hidden = true;
+    }
+  } catch (error) {
+    if ($('hfBadge')) {
+      $('hfBadge').textContent = 'Error';
+      $('hfBadge').className = 'status-badge inactive';
+    }
+    if ($('hfCurrentStatus')) {
+      $('hfCurrentStatus').textContent = `Failed to load settings: ${error.message}`;
+    }
+  }
+}
+
+$('settingsForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const feedback = $('settingsFeedback');
+  const tokenInput = $('adminHfToken');
+  const saveBtn = $('saveHfTokenBtn');
+  const token = tokenInput.value.trim();
+
+  if (!token) {
+    if (feedback) {
+      feedback.textContent = 'Please enter a valid Hugging Face token (or use Remove Token to clear it).';
+      feedback.className = 'feedback-msg error';
+    }
+    return;
+  }
+
+  saveBtn.disabled = true;
+  if (feedback) {
+    feedback.textContent = 'Saving token...';
+    feedback.className = 'feedback-msg';
+  }
+
+  try {
+    await request('/api/admin/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hf_token: token })
+    });
+    tokenInput.value = '';
+    if (feedback) {
+      feedback.textContent = 'Hugging Face token saved successfully! Diarization is now enabled for users.';
+      feedback.className = 'feedback-msg success';
+    }
+    await loadAdminSettings();
+    await loadAudit();
+  } catch (error) {
+    if (feedback) {
+      feedback.textContent = error.message;
+      feedback.className = 'feedback-msg error';
+    }
+  } finally {
+    saveBtn.disabled = false;
+  }
+});
+
+$('clearHfTokenBtn')?.addEventListener('click', async () => {
+  const feedback = $('settingsFeedback');
+  const confirmed = window.confirm('Are you sure you want to remove the Hugging Face token? Speaker Diarization will be hidden from users.');
+  if (!confirmed) return;
+
+  if (feedback) {
+    feedback.textContent = 'Removing token...';
+    feedback.className = 'feedback-msg';
+  }
+
+  try {
+    await request('/api/admin/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hf_token: '' })
+    });
+    $('adminHfToken').value = '';
+    if (feedback) {
+      feedback.textContent = 'Token removed. Speaker Diarization is now disabled and hidden from users.';
+      feedback.className = 'feedback-msg success';
+    }
+    await loadAdminSettings();
+    await loadAudit();
+  } catch (error) {
+    if (feedback) {
+      feedback.textContent = error.message;
+      feedback.className = 'feedback-msg error';
+    }
+  }
+});
 
 $('logout')?.addEventListener('click', async () => {
   await fetch('/api/logout', {method: 'POST'});

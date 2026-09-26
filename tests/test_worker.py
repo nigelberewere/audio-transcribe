@@ -157,3 +157,41 @@ def test_api_jobs_endpoint_ordering_and_queue_positions(tmp_path, monkeypatch):
     assert job_map["job-1"]["queue_position"] == 1
     assert job_map["job-2"]["queue_position"] is None
     assert job_map["job-3"]["queue_position"] == 2
+
+
+def test_diarization_status_and_upload(tmp_path, monkeypatch):
+    import os
+    from io import BytesIO
+    from fastapi import UploadFile
+    from app import main
+
+    settings = Settings()
+    settings.data_dir = tmp_path / "storage"
+    settings.model_dir = tmp_path / "models"
+    settings.ensure_directories()
+    database = Database(settings.db_path)
+    settings.env_file = tmp_path / ".env"
+    monkeypatch.setattr(main, "database", database)
+    monkeypatch.setattr(main, "settings", settings)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+
+    # Status endpoint returns availability
+    status = main.diarization_status(user="user")
+    assert "available" in status
+    assert "has_token" in status
+
+    # Upload endpoint properly sets diarization flag and environment token
+    file_obj = UploadFile(filename="meeting.mp3", file=BytesIO(b"audio content"))
+    job = main.upload(
+        file=file_obj,
+        model="large-v3",
+        language="en",
+        initial_prompt="",
+        diarization=True,
+        hf_token="hf_test_token_xyz",
+        formats="txt,srt",
+        user="user",
+    )
+    assert job["diarization"] is True
+    assert os.environ.get("HF_TOKEN") == "hf_test_token_xyz"
+    monkeypatch.delenv("HF_TOKEN", raising=False)

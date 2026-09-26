@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import logging
+import os
 import secrets
 import shutil
 from contextlib import asynccontextmanager
@@ -654,11 +655,38 @@ def restore_document(document_id: str, admin: str = Depends(current_admin)):
     return database.get_document(document_id)
 
 
+@app.get("/api/diarization/status")
+def diarization_status(user: str = Depends(current_user)):
+    from .diarizer import is_diarization_available
+    has_token = bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN"))
+    available, message = is_diarization_available()
+    return {
+        "available": available,
+        "has_token": has_token,
+        "message": message,
+    }
+
+
 @app.post("/api/jobs")
-def upload(file: UploadFile = File(...), model: str = Form("auto"), language: str = Form("auto"), initial_prompt: str = Form(""), diarization: bool = Form(False), formats: str = Form("txt,txt_timestamps,srt,vtt,docx,json"), user: str = Depends(current_user)):
+def upload(file: UploadFile = File(...), model: str = Form("auto"), language: str = Form("auto"), initial_prompt: str = Form(""), diarization: bool = Form(False), hf_token: str = Form(""), formats: str = Form("txt,txt_timestamps,srt,vtt,docx,json"), user: str = Depends(current_user)):
     extension = Path(file.filename or "").suffix.lower()
     if extension not in SUPPORTED_EXTENSIONS:
         raise HTTPException(status_code=415, detail=f"Unsupported format. Allowed: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
+    if hf_token and hf_token.strip():
+        token_val = hf_token.strip()
+        os.environ["HF_TOKEN"] = token_val
+        try:
+            env_file = getattr(settings, "env_file", Path(".env"))
+            if env_file.exists():
+                lines = []
+                for line in env_file.read_text(encoding="utf-8").splitlines():
+                    if line.startswith("HF_TOKEN="):
+                        lines.append(f"HF_TOKEN={token_val}")
+                    else:
+                        lines.append(line)
+                env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception:
+            pass
     job_id = uuid4().hex; destination = settings.upload_dir / f"{job_id}{extension}"
     with destination.open("wb") as output:
         while chunk := file.file.read(1024 * 1024): output.write(chunk)
@@ -850,3 +878,48 @@ def admin_audit_log(actor: str | None = None, action: str | None = None, limit: 
 @app.get("/api/admin/overview")
 def admin_overview(_: str = Depends(current_admin)):
     return {"total_users": database.count_users(), "active_jobs": database.count_active_jobs(), "completed_jobs_today": database.count_completed_jobs_today(), **database.document_stats()}
+
+
+class AdminSettingsPayload(BaseModel):
+    hf_token: str = ""
+
+
+@app.get("/api/admin/settings")
+def get_admin_settings(_: str = Depends(current_admin)):
+    from .diarizer import is_diarization_available
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or ""
+    available, message = is_diarization_available()
+    masked_token = f"{token[:4]}...{token[-4:]}" if len(token) > 8 else ("***" if token else "")
+    return {
+        "has_token": bool(token),
+        "masked_token": masked_token,
+        "available": available,
+        "message": message,
+    }
+
+
+@app.post("/api/admin/settings")
+def update_admin_settings(payload: AdminSettingsPayload, admin: str = Depends(current_admin)):
+    token = payload.hf_token.strip()
+    os.environ["HF_TOKEN"] = token
+    env_file = getattr(settings, "env_file", Path(".env"))
+    try:
+        if env_file.exists():
+            lines = []
+            found = False
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                if line.startswith("HF_TOKEN="):
+                    lines.append(f"HF_TOKEN={token}")
+                    found = True
+                else:
+                    lines.append(line)
+            if not found:
+                lines.append(f"HF_TOKEN={token}")
+            env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        else:
+            env_file.write_text(f"HF_TOKEN={token}\n", encoding="utf-8")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to update settings: {exc}")
+
+    database.add_audit_log(admin, "settings_updated", "hf_token", "Configured Hugging Face token" if token else "Removed Hugging Face token")
+    return {"ok": True, "has_token": bool(token)}

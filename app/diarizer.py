@@ -65,10 +65,21 @@ def diarize_audio(
         import torch
         from pyannote.audio import Pipeline
 
-        pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
-            use_auth_token=token,
-        )
+        try:
+            pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                token=token,
+            )
+        except TypeError:
+            pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                use_auth_token=token,
+            )
+
+        if pipeline is None:
+            raise RuntimeError(
+                "Failed to initialize pyannote pipeline. Please verify your Hugging Face token and ensure you have accepted model conditions at https://huggingface.co/pyannote/speaker-diarization-3.1 and https://huggingface.co/pyannote/segmentation-3.0"
+            )
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         pipeline.to(device)

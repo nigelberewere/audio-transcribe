@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/jpeg" href="/static/assets/logo.jpg">
   <title>Transcription | Zingsa Files Center</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
 <main class="shell">
@@ -63,6 +63,13 @@
           <option value="en">English</option>
         </select>
       </label>
+      <div class="diarization-field" id="diarizationField" hidden>
+        <label class="diarization-toggle" title="Identify and label different speakers (Speaker 1, Speaker 2)">
+          <input type="checkbox" id="diarization">
+          <span>Speaker Diarization</span>
+        </label>
+        <span class="diarization-pill">pyannote</span>
+      </div>
       <label class="wide-field">Initial prompt
         <input id="prompt" placeholder="Names, terminology, case numbers">
       </label>
@@ -87,7 +94,7 @@
     Zingsa Files Center &middot; Internal use only
   </footer>
 </main>
-<script src="/static/transcription.js"></script>
-<script src="/static/search.js"></script>
+<script src="/static/transcription.js?v=5"></script>
+<script src="/static/search.js?v=5"></script>
 </body>
 </html>

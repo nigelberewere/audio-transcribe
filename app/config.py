@@ -41,6 +41,7 @@ class Settings:
         self.session_secret = os.getenv("TRANSCRIBE_SESSION_SECRET", "change-this-secret")
         self.admin_user = os.getenv("TRANSCRIBE_ADMIN_USER", "")
         self.admin_password = os.getenv("TRANSCRIBE_ADMIN_PASSWORD", "")
+        self.env_file = Path(os.getenv("TRANSCRIBE_ENV_FILE", ".env"))
 
     @property
     def db_path(self) -> Path:

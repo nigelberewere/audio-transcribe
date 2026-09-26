@@ -283,4 +283,42 @@ def test_admin_can_delete_user(admin_state):
     assert tuple(row) == ("owner", "user_deleted", "member", "role: user")
 
 
+def test_admin_settings_get_and_update(admin_state, tmp_path, monkeypatch):
+    test_env = tmp_path / ".env"
+    monkeypatch.setattr(main.settings, "env_file", test_env)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
+
+    # Initial state: no token
+    settings_data = main.get_admin_settings(_="owner")
+    assert settings_data["has_token"] is False
+    assert settings_data["masked_token"] == ""
+
+    # Set token
+    payload = main.AdminSettingsPayload(hf_token="hf_1234567890abcdef")
+    res = main.update_admin_settings(payload, admin="owner")
+    assert res == {"ok": True, "has_token": True}
+    assert test_env.exists()
+    assert "HF_TOKEN=hf_1234567890abcdef" in test_env.read_text(encoding="utf-8")
+
+    # Read back masked token
+    settings_data = main.get_admin_settings(_="owner")
+    assert settings_data["has_token"] is True
+    assert settings_data["masked_token"] == "hf_1...cdef"
+
+    # Verify audit log
+    with admin_state.connect() as connection:
+        row = connection.execute(
+            "SELECT actor, action, target FROM audit_log WHERE action = 'settings_updated'"
+        ).fetchone()
+    assert tuple(row) == ("owner", "settings_updated", "hf_token")
+
+    # Clear token
+    clear_payload = main.AdminSettingsPayload(hf_token="")
+    res_clear = main.update_admin_settings(clear_payload, admin="owner")
+    assert res_clear == {"ok": True, "has_token": False}
+    assert main.get_admin_settings(_="owner")["has_token"] is False
+
+
+
 

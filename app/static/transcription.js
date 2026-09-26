@@ -43,13 +43,13 @@ async function loadJobs() {
       ? filtered.map(job => `<article class="job">
           <div>
             <h3>${escapeHtml(job.filename)}</h3>
-            <div class="meta">${job.status === 'waiting' ? `Queue position ${job.queue_position}` : job.status} · requested ${job.requested_model} · used ${job.selected_model || 'pending'}</div>
+            <div class="meta">${job.status === 'waiting' ? `Queue position ${job.queue_position}` : job.status} · requested ${job.requested_model} · used ${job.selected_model || 'pending'}${job.diarization ? ' · <span class="tag-diarization">Diarized</span>' : ''}</div>
             <div class="bar"><i style="width:${job.progress}%"></i></div>
             <div class="meta">${Math.round(job.progress)}% ${job.error ? '· ' + escapeHtml(job.error) : ''}</div>
           </div>
           <div class="job-status-col">
             <span class="status ${job.status}">${job.status}</span>
-            ${job.eta_seconds ? `<span class="job-eta meta" title="${Math.round(job.eta_seconds)}s remaining"><svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>${formatEta(job.eta_seconds)}</span>` : ''}
+            ${job.status === 'processing' && job.eta_seconds ? `<span class="job-eta meta" title="${Math.round(job.eta_seconds)}s remaining"><svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>${formatEta(job.eta_seconds)}</span>` : ''}
           </div>
           <div class="downloads">
             ${job.status === 'done' ? job.formats.map(format => `<a href="/api/jobs/${job.id}/outputs/${job.filename.replace(/\.[^.]+$/, '')}${format === 'txt_timestamps' ? '_timestamps.txt' : '.' + format}">${format}</a>`).join('') : ''}
@@ -239,9 +239,31 @@ if ($('file')) {
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => e.preventDefault());
 
+let diarizationInfo = { available: false, has_token: false };
+
+async function checkDiarization() {
+  try {
+    diarizationInfo = await request('/api/diarization/status');
+    const field = $('diarizationField');
+    if (field) {
+      if (diarizationInfo.has_token) {
+        field.hidden = false;
+      } else {
+        field.hidden = true;
+        if ($('diarization')) $('diarization').checked = false;
+      }
+    }
+  } catch {
+    // optional check
+  }
+}
+
 $('upload').onclick = async () => {
   const file = selectedFile || ($('file')?.files?.[0]);
   if (!file) return $('uploadError').textContent = 'Choose a recording first.';
+
+  const isDiarize = $('diarizationField')?.hidden ? false : ($('diarization')?.checked || false);
+
   const uploadBtn = $('upload');
   uploadBtn.disabled = true;
   const originalText = uploadBtn.textContent;
@@ -253,6 +275,8 @@ $('upload').onclick = async () => {
   body.append('language', $('language').value);
   body.append('initial_prompt', $('prompt').value);
   body.append('formats', $('formats').value);
+  body.append('diarization', isDiarize);
+
   try {
     await request('/api/jobs', {method: 'POST', body});
     $('uploadError').textContent = '';
@@ -275,3 +299,5 @@ $('refresh').onclick = loadJobs;
 setInterval(loadJobs, 3000);
 loadUser();
 loadJobs();
+checkDiarization();
+

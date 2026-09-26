@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Administration | Zingsa Files Center</title><link rel="stylesheet" href="/static/style.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Administration | Zingsa Files Center</title><link rel="stylesheet" href="/static/style.css?v=5"></head>
 <body>
 <main class="shell">
   <header class="brand-card">
@@ -19,6 +19,36 @@
   <section id="stats" class="stats"></section>
   <section class="admin-toolbar"><p class="eyebrow">ACCESS CONTROL</p><button id="addUser">Add new user</button></section>
   <section class="panel accounts-panel"><div class="accounts-heading"><div><p class="eyebrow">DIRECTORY</p><h2>Accounts</h2></div></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th>Created</th><th>Created by</th><th>Actions</th></tr></thead><tbody id="users"></tbody></table></div></section>
+  <section class="panel settings-panel">
+    <div class="accounts-heading">
+      <div>
+        <p class="eyebrow">SYSTEM CONFIGURATION</p>
+        <h2>Speaker Diarization (Pyannote)</h2>
+      </div>
+      <span class="status-badge" id="hfBadge">Checking...</span>
+    </div>
+    <form id="settingsForm" class="settings-form">
+      <p class="meta" style="margin: 0 0 16px; line-height: 1.5;">
+        Configure the Hugging Face access token for speaker separation. When a valid token is saved here, the <strong>Speaker Diarization</strong> toggle automatically appears for users on the transcription page. If no token is configured, the option remains hidden to keep the user experience simple.
+      </p>
+      <div class="settings-form-row">
+        <label style="flex: 1;">Hugging Face Access Token
+          <input type="password" id="adminHfToken" placeholder="hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off">
+        </label>
+        <button type="submit" id="saveHfTokenBtn" style="height: 43px; align-self: flex-end;">Save Token</button>
+        <button type="button" id="clearHfTokenBtn" class="quiet" style="height: 43px; align-self: flex-end;" hidden>Remove Token</button>
+      </div>
+      <div class="settings-token-meta" style="margin-top: 8px;">
+        <span class="meta" id="hfCurrentStatus">Checking configuration...</span>
+        <span class="meta">&middot;</span>
+        <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener" class="settings-link">Create token on Hugging Face &rarr;</a>
+      </div>
+      <div class="settings-notice" style="margin-top: 14px; padding: 12px 14px; background: var(--paper); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; color: var(--muted); line-height: 1.5;">
+        <strong style="color: var(--ink);">Gated Model Access Required:</strong> Your Hugging Face account must have accepted user terms for both <a href="https://huggingface.co/pyannote/speaker-diarization-3.1" target="_blank" rel="noopener" style="color: var(--teal); font-weight: 600;">pyannote/speaker-diarization-3.1</a> and <a href="https://huggingface.co/pyannote/segmentation-3.0" target="_blank" rel="noopener" style="color: var(--teal); font-weight: 600;">pyannote/segmentation-3.0</a>.
+      </div>
+      <p id="settingsFeedback" class="feedback-msg" style="margin-top: 10px;"></p>
+    </form>
+  </section>
   <section class="panel audit-panel"><div class="audit-heading"><div><p class="eyebrow">SECURITY RECORD</p><h2>Audit log</h2></div><span class="read-only">Read only</span></div><button id="auditFilterToggle" class="quiet filter-button">Filters</button><div id="auditFilters" class="audit-filters" hidden><label>Actor<select id="auditActor"><option value="">All actors</option></select></label><label>Action<select id="auditAction"><option value="">All actions</option></select></label></div><div class="table-wrap"><table><thead><tr><th>Timestamp</th><th>Actor</th><th>Action</th><th>Target</th><th>Details</th></tr></thead><tbody id="auditLog"></tbody></table></div><div class="audit-more"><button id="loadMoreAudit" class="quiet" hidden>Load more</button></div></section>
   <footer class="page-footer">
     Zingsa Files Center &middot; Internal use only
@@ -86,6 +116,6 @@
     <button type="button" id="closeManageUser" class="quiet">Done</button>
   </div>
 </dialog>
-<script src="/static/admin.js?v=4"></script>
-<script src="/static/search.js"></script>
+<script src="/static/admin.js?v=5"></script>
+<script src="/static/search.js?v=5"></script>
 </body></html>

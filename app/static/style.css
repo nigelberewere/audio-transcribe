@@ -536,3 +536,195 @@ dialog::backdrop { background: rgba(16, 40, 63, .35); }
   }
 }
 
+/* Diarization option & Hugging Face token configuration */
+.options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-top: 18px;
+  align-items: end;
+}
+
+.diarization-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  height: 45px;
+  box-sizing: border-box;
+}
+
+.diarization-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  cursor: pointer;
+  user-select: none;
+  margin: 0;
+}
+
+.diarization-toggle input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--teal);
+  cursor: pointer;
+}
+
+.diarization-pill {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--blue, #e4f0fa);
+  color: var(--teal, #147f83);
+  transition: all 0.2s ease;
+}
+
+.diarization-pill.ready {
+  background: var(--green, #e4f4ec);
+  color: var(--teal, #147f83);
+}
+
+.hf-token-box {
+  margin-top: 14px;
+  padding: 14px 18px;
+  background: #fdfaf4;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--teal);
+  border-radius: 6px;
+}
+
+.hf-token-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.hf-token-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.hf-token-title svg {
+  color: var(--teal);
+}
+
+.hf-token-desc {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.hf-token-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.hf-token-input-wrap input {
+  flex: 1;
+  max-width: 440px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: monospace;
+}
+
+.hf-token-link {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--teal);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.hf-token-link:hover {
+  text-decoration: underline;
+}
+
+.tag-diarization {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--blue, #e4f0fa);
+  color: var(--teal, #147f83);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.settings-panel {
+  margin-bottom: 24px;
+}
+
+.settings-form {
+  margin-top: 14px;
+}
+
+.settings-form-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.settings-form-row label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.settings-token-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-link {
+  color: var(--teal);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-link:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 760px) {
+  .options {
+    grid-template-columns: 1fr;
+  }
+  .hf-token-input-wrap {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .hf-token-input-wrap input {
+    max-width: 100%;
+  }
+  .settings-form-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+
