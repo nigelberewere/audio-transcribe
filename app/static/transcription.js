@@ -43,7 +43,14 @@ async function loadJobs() {
             <button onclick="removeJob('${job.id}')" class="quiet">Delete</button>
           </div>
         </article>`).join('')
-      : '<p class="meta">No active jobs in the queue.</p>';
+      : `
+        <div class="empty-state">
+          <div class="empty-state-icon">
+            <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+          </div>
+          <p class="empty-state-title">No active jobs in the queue.</p>
+          <p class="empty-state-guide">Drop a recording above to get started</p>
+        </div>`;
   } catch (error) {
     if (error.message.includes('Authentication')) location.href = '/';
   }

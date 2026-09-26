@@ -81,6 +81,9 @@ The application couples **Century Gothic** for titles/metrics with **Trebuchet M
   - Responsive breakpoint (`@media (max-width: 760px)`): `padding: 22px 14px;`
 - **Admin Shell (`.admin-shell`)**:
   - `max-width: 1180px; min-height: 100vh; padding: 28px;`
+- **Shared Page Footer (`.page-footer`)**:
+  - `margin-top: 48px; padding: 16px 0 8px; text-align: center; font-size: 12px; color: var(--muted); line-height: 1.5;`
+  - A standard part of every authenticated page (`/home`, `/transcription`, `/documents`, `/admin`). Sits naturally after the main page content inside `.shell` (not fixed or sticky).
 
 ### Border-Radius Scale in Use
 - `3px`: Text inputs (`input`), dropdowns (`select`), and action buttons (`button`).
@@ -339,6 +342,31 @@ Used on the Home dashboard (`/home`) to present available workspace modules:
 *(Card Style: `background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 22px; text-decoration: none; display: flex; flex-direction: column; transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;`)*
 *(Card Hover: `border-color: var(--teal); transform: translateY(-2px); box-shadow: 0 10px 24px rgba(16, 40, 63, 0.1);`)*
 
+### 10. Shared Minimal Footer (`.page-footer`)
+Every authenticated view includes a single muted line at the bottom of `.shell`:
+```html
+<footer class="page-footer">
+  Zingsa Files Center &middot; Internal use only
+</footer>
+```
+*(Style: `margin-top: 48px; padding: 16px 0 8px; text-align: center; font-size: 12px; color: var(--muted); line-height: 1.5;`)*
+
+### 11. Empty State (`.empty-state`)
+Used in file lists and job queues when no items are present. Replaces raw single-line strings with an icon, heading, and guidance message:
+```html
+<div class="empty-state">
+  <div class="empty-state-icon">
+    <!-- SVG icon (folder or mic/waveform) -->
+  </div>
+  <p class="empty-state-title">No documents in this folder.</p>
+  <p class="empty-state-guide">Drop a file above to get started</p>
+</div>
+```
+*(Container: `display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 36px 20px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 12px var(--shadow);`)*
+*(Icon: `display: grid; place-items: center; width: 44px; height: 44px; border-radius: 10px; background: var(--blue); color: var(--teal); margin-bottom: 12px;`)*
+*(Title: `font-size: 15px; font-weight: 700; color: var(--ink); margin: 0 0 4px;`)*
+*(Guide: `font-size: 13px; color: var(--muted); margin: 0;`)*
+
 
 ---
 
@@ -400,14 +428,19 @@ Every view in the system follows a predictable 3-tier hierarchy:
     <!-- Panel content -->
   </section>
 
+  <!-- 4. Shared Minimal Footer -->
+  <footer class="page-footer">
+    Zingsa Files Center &middot; Internal use only
+  </footer>
+
 </main>
 
-<!-- 4. Modals / Dialogs (Optional) -->
+<!-- 5. Modals / Dialogs (Optional) -->
 <dialog id="actionModal">
   <!-- Dialog content -->
 </dialog>
 
-<!-- 5. Client Script -->
+<!-- 6. Client Script -->
 <script src="/static/feature.js"></script>
 </body>
 </html>
@@ -460,6 +493,8 @@ Every view in the system follows a predictable 3-tier hierarchy:
 6. **User Badge Never Includes Status Dot**: The user-pill component in the top header (`.user-name`) must strictly render the user's name as plain text without any status dot, indicator icon, or leading pseudo-element (`::before`/`::after`). Never add a status dot to `.user-name`.
 7. **Document Upload Limits and Constraints**: Documents repository uploads are restricted to the defined file types (`pdf, doc, docx, xls, xlsx, ppt, pptx, txt, csv, rtf, odt, ods, odp, jpg, jpeg, png`) with a strict `50MB` size limit. This constraint must always be enforced both client-side (with immediate UI feedback) and server-side (returning a clear 400 error and preventing any unallowed files or database rows from being created).
 8. **PDF Tools & Document Lineage**: Any document generated through repository utilities (merging, splitting, watermarking, converting) must create a brand-new document record without modifying or overwriting source documents, must record source document IDs in `source_document_ids` for lineage tracking, and must log an audit entry (`document_merged`, `document_split`, `document_watermarked`, `document_converted`).
+9. **Shared Page Footer**: Every top-level page (`Home`, `Transcription`, `Documents`, `Admin`) must include the `.page-footer` element at the bottom of the `.shell` container, styled with `var(--muted)` small text and sitting naturally after the content without sticky/fixed positioning.
+10. **Rich Empty States**: Empty collection states in queues and file lists must render an `.empty-state` container comprising a small themed icon, a bold primary headline, and a secondary action guidance line (e.g. "Drop a file/recording above to get started").
 
 ---
 

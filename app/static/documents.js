@@ -108,7 +108,14 @@ async function load() {
     }).join('');
   } else {
     $('selectBar').hidden = true;
-    $('documents').innerHTML = '<p class="meta">No documents in this folder.</p>';
+    $('documents').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon">
+          <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+        </div>
+        <p class="empty-state-title">No documents in this folder.</p>
+        <p class="empty-state-guide">Drop a file above to get started</p>
+      </div>`;
   }
 
   // Wire folder buttons

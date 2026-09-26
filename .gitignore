@@ -8,3 +8,11 @@ logs/
 # Downloaded Whisper/Hugging Face model weights are kept outside Git.
 models/
 *.db
+*.m4a
+*.mp3
+*.wav
+*.flac
+*.ogg
+*.aac
+*.mp4
+*.mkv
