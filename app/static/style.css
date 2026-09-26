@@ -76,6 +76,29 @@ header, .section-head { display: flex; align-items: center; justify-content: spa
 .brand-mark { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid var(--accent); border-radius: 11px; background: var(--blue); color: var(--accent); font-size: 22px; }
 .brand-name { font: 700 15px 'Century Gothic', 'Trebuchet MS', sans-serif; letter-spacing: .08em; }
 .brand-subtitle { margin-top: 3px; color: var(--muted); font-size: 13px; }
+
+.header-search { position: relative; flex: 1; max-width: 380px; margin: 0 16px; }
+.search-input-wrapper { position: relative; display: flex; align-items: center; }
+.search-icon { position: absolute; left: 12px; color: var(--muted); pointer-events: none; }
+#globalSearch { width: 100%; padding: 8px 32px 8px 36px; border: 1px solid var(--line); border-radius: 20px; font-size: 13px; background: var(--paper); color: var(--ink); outline: none; transition: border-color .15s ease, box-shadow .15s ease; }
+#globalSearch:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(32, 178, 170, 0.15); }
+.search-clear-btn { position: absolute; right: 10px; background: none !important; border: none !important; color: var(--muted) !important; font-size: 18px !important; cursor: pointer; padding: 0 !important; line-height: 1; }
+.search-clear-btn:hover { color: var(--ink) !important; }
+.search-results-dropdown { position: absolute; top: calc(100% + 8px); left: 0; right: 0; min-width: 360px; max-height: 480px; overflow-y: auto; background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 32px var(--shadow); z-index: 1000; padding: 12px; }
+.search-group { margin-bottom: 14px; }
+.search-group:last-child { margin-bottom: 0; }
+.search-group-title { font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--teal); padding: 4px 8px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.search-result-item { padding: 8px; border-radius: 6px; margin-bottom: 4px; transition: background .15s; }
+.search-result-item:hover { background: var(--paper); }
+.search-result-header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.search-result-title { font-weight: 600; font-size: 13px; color: var(--ink); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-result-link { font-size: 12px; font-weight: 600; color: var(--teal); text-decoration: none; white-space: nowrap; }
+.search-result-link:hover { text-decoration: underline; }
+.search-result-snippet { margin: 4px 0 0; font-size: 12px; color: var(--muted); line-height: 1.4; }
+.search-result-snippet mark { background: #fef08a; color: #713f12; border-radius: 2px; padding: 0 2px; font-weight: 600; }
+.search-no-results { padding: 16px; text-align: center; color: var(--muted); font-size: 13px; }
+.search-tags { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+.search-tag-badge { font-size: 10px; padding: 2px 6px; background: var(--line); border-radius: 4px; color: var(--muted); }
 h1, h2 { font-family: 'Century Gothic', 'Trebuchet MS', sans-serif; }
 h2 { margin: 0 0 14px; }
 .eyebrow { margin: 0 0 8px; color: var(--teal); font-size: 11px; letter-spacing: 2px; font-weight: bold; }

@@ -231,6 +231,15 @@ def _validate_document_filename(filename: str | None) -> tuple[str, str]:
     return cleaned, ext
 
 
+@app.get("/api/search")
+def search(q: str = "", user: str = Depends(current_user)):
+    query = q.strip()
+    if not query:
+        return {"transcripts": [], "documents": []}
+    database.add_audit_log(user, "search_performed", None, query)
+    return database.search(query)
+
+
 @app.get("/api/documents")
 def list_documents(folder_id: str | None = None, user: str = Depends(current_user)):
     return {"folders": database.list_folders(_document_folder(folder_id)), "documents": database.list_documents(folder_id)}
@@ -666,8 +675,10 @@ def preview(job_id: str, user: str = Depends(current_user)):
 
 @app.put("/api/jobs/{job_id}/preview")
 def edit_preview(job_id: str, edit: TranscriptEdit, user: str = Depends(current_user)):
-    if not database.get_job(job_id): raise HTTPException(404, "Job not found")
+    job = database.get_job(job_id)
+    if not job: raise HTTPException(404, "Job not found")
     target = settings.job_dir / job_id / "edited.txt"; target.parent.mkdir(parents=True, exist_ok=True); target.write_text(edit.text, encoding="utf-8")
+    database.index_transcript(job_id, job["filename"], job.get("initial_prompt", ""), edit.text)
     return {"ok": True}
 
 
@@ -688,6 +699,7 @@ def delete_job(job_id: str, user: str = Depends(current_user)):
         if path.is_dir(): shutil.rmtree(path, ignore_errors=True)
         else: path.unlink(missing_ok=True)
     database.update_job(job_id, status="deleted")
+    database.remove_from_search_index("transcript", job_id)
     return {"ok": True}
 
 

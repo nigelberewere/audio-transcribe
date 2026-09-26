@@ -17,6 +17,14 @@
         <div class="brand-subtitle">Documents</div>
       </div>
     </div>
+    <div class="header-search">
+      <div class="search-input-wrapper">
+        <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input type="search" id="globalSearch" placeholder="Search files & transcripts..." autocomplete="off">
+        <button id="clearSearch" class="search-clear-btn" type="button" aria-label="Clear search" hidden>&times;</button>
+      </div>
+      <div id="searchResults" class="search-results-dropdown" hidden></div>
+    </div>
     <nav>
       <a href="/home">Home</a>
       <a href="/transcription">Transcription</a>
@@ -155,5 +163,6 @@
 </dialog>
 
 <script src="/static/documents.js?v=2"></script>
+<script src="/static/search.js"></script>
 </body>
 </html>

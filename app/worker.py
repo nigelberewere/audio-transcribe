@@ -65,6 +65,8 @@ class TranscriptionWorker:
             checkpoint.write_text(json.dumps(segments, indent=2), encoding="utf-8")
         write_outputs(job, segments, job_root / "outputs")
         self.database.update_job(job["id"], status="done", progress=100, elapsed_seconds=0, eta_seconds=0, completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        transcript_text = "\n".join(s.get("text", "").strip() for s in segments if s.get("text", "").strip())
+        self.database.index_transcript(job["id"], job["filename"], job.get("initial_prompt", ""), transcript_text)
 
     def _transcribe(self, job: dict, model_name: str, wav_path: Path, checkpoint: Path, segments: list[dict]) -> None:
         from faster_whisper import WhisperModel

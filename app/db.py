@@ -82,6 +82,14 @@ CREATE TABLE IF NOT EXISTS document_tags (
     PRIMARY KEY (document_id, tag),
     FOREIGN KEY (document_id) REFERENCES documents(id)
 );
+CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
+    item_type UNINDEXED,
+    item_id UNINDEXED,
+    filename,
+    tags,
+    content,
+    tokenize = 'porter unicode61'
+);
 """
 
 
@@ -253,6 +261,12 @@ class Database:
                 ),
             )
             connection.executemany("INSERT INTO document_tags (document_id, tag) VALUES (?, ?)", [(document["id"], tag) for tag in tags])
+        try:
+            from .pdf_tools import extract_text_from_file
+            text = extract_text_from_file(document.get("storage_path", ""))
+            self.index_document(document["id"], document["filename"], tags, text)
+        except Exception:
+            pass
 
     def get_document(self, document_id: str, include_deleted: bool = False) -> dict[str, Any] | None:
         query = "SELECT d.*, GROUP_CONCAT(t.tag) AS tags FROM documents d LEFT JOIN document_tags t ON t.document_id = d.id WHERE d.id = ?"
@@ -283,6 +297,13 @@ class Database:
         with self.connect() as connection:
             connection.execute("INSERT INTO document_versions (id, document_id, version_number, storage_path, uploaded_by, uploaded_at, change_note) VALUES (?, ?, ?, ?, ?, ?, ?)", tuple(version.values()))
             connection.execute("UPDATE documents SET storage_path = ?, uploaded_by = ?, uploaded_at = ?, file_size = ?, mime_type = ?, current_version = ? WHERE id = ?", (version["storage_path"], version["uploaded_by"], version["uploaded_at"], file_size, mime_type, version["version_number"], document_id))
+        doc = self.get_document(document_id)
+        try:
+            from .pdf_tools import extract_text_from_file
+            text = extract_text_from_file(version.get("storage_path", ""))
+            self.index_document(document_id, doc["filename"] if doc else Path(version["storage_path"]).name, doc.get("tags", []) if doc else [], text)
+        except Exception:
+            pass
 
     def list_document_versions(self, document_id: str) -> list[dict[str, Any]]:
         with self.connect() as connection:
@@ -293,10 +314,29 @@ class Database:
         with self.connect() as connection:
             connection.execute("DELETE FROM document_tags WHERE document_id = ?", (document_id,))
             connection.executemany("INSERT INTO document_tags (document_id, tag) VALUES (?, ?)", [(document_id, tag) for tag in tags])
+        doc = self.get_document(document_id)
+        if doc and not doc.get("deleted"):
+            try:
+                from .pdf_tools import extract_text_from_file
+                text = extract_text_from_file(doc.get("storage_path", ""))
+                self.index_document(document_id, doc["filename"], tags, text)
+            except Exception:
+                pass
 
     def set_document_deleted(self, document_id: str, deleted: bool) -> None:
         with self.connect() as connection:
             connection.execute("UPDATE documents SET deleted = ? WHERE id = ?", (int(deleted), document_id))
+            if deleted:
+                connection.execute("DELETE FROM search_index WHERE item_type = 'document' AND item_id = ?", (document_id,))
+        if not deleted:
+            doc = self.get_document(document_id)
+            if doc:
+                try:
+                    from .pdf_tools import extract_text_from_file
+                    text = extract_text_from_file(doc.get("storage_path", ""))
+                    self.index_document(document_id, doc["filename"], doc.get("tags", []), text)
+                except Exception:
+                    pass
 
     def document_stats(self) -> dict[str, int]:
         today = datetime.now(timezone.utc).date().isoformat()
@@ -332,6 +372,87 @@ class Database:
         values.append(job_id)
         with self.connect() as connection:
             connection.execute(f"UPDATE jobs SET {assignments} WHERE id = ?", values)
+            if fields.get("status") == "deleted":
+                connection.execute("DELETE FROM search_index WHERE item_type = 'transcript' AND item_id = ?", (job_id,))
+
+    def index_transcript(self, job_id: str, filename: str, initial_prompt: str | None, transcript_text: str) -> None:
+        tags = initial_prompt or ""
+        content = transcript_text or ""
+        with self.connect() as connection:
+            connection.execute("DELETE FROM search_index WHERE item_type = 'transcript' AND item_id = ?", (job_id,))
+            connection.execute(
+                "INSERT INTO search_index (item_type, item_id, filename, tags, content) VALUES ('transcript', ?, ?, ?, ?)",
+                (job_id, filename, tags, content),
+            )
+
+    def index_document(self, document_id: str, filename: str, tags: list[str] | str, text_content: str) -> None:
+        tag_str = ", ".join(tags) if isinstance(tags, (list, tuple)) else (tags or "")
+        content = text_content or ""
+        with self.connect() as connection:
+            connection.execute("DELETE FROM search_index WHERE item_type = 'document' AND item_id = ?", (document_id,))
+            connection.execute(
+                "INSERT INTO search_index (item_type, item_id, filename, tags, content) VALUES ('document', ?, ?, ?, ?)",
+                (document_id, filename, tag_str, content),
+            )
+
+    def remove_from_search_index(self, item_type: str, item_id: str) -> None:
+        with self.connect() as connection:
+            connection.execute("DELETE FROM search_index WHERE item_type = ? AND item_id = ?", (item_type, item_id))
+
+    def search(self, query: str) -> dict[str, list[dict[str, Any]]]:
+        import re
+        tokens = re.findall(r"\w+", query)
+        if not tokens:
+            return {"transcripts": [], "documents": []}
+        fts_query = " ".join(f'"{t}"*' for t in tokens)
+        with self.connect() as connection:
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT item_type, item_id, filename, tags,
+                           snippet(search_index, -1, '<mark>', '</mark>', '...', 15) as snippet
+                    FROM search_index
+                    WHERE search_index MATCH ?
+                    ORDER BY rank
+                    LIMIT 50
+                    """,
+                    (fts_query,),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return {"transcripts": [], "documents": []}
+
+        transcripts: list[dict[str, Any]] = []
+        documents: list[dict[str, Any]] = []
+        for row in rows:
+            item_type = row["item_type"]
+            item_id = row["item_id"]
+            snippet = row["snippet"]
+            if item_type == "transcript":
+                job = self.get_job(item_id)
+                if job is not None and job.get("status") != "done":
+                    continue
+                transcripts.append({
+                    "id": item_id,
+                    "filename": job["filename"] if job else row["filename"],
+                    "snippet": snippet,
+                    "created_at": job.get("created_at") if job else None,
+                    "duration": job.get("duration", 0.0) if job else 0.0,
+                    "selected_model": job.get("selected_model") if job else None,
+                })
+            elif item_type == "document":
+                doc = self.get_document(item_id, include_deleted=True)
+                if doc is not None and doc.get("deleted"):
+                    continue
+                documents.append({
+                    "id": item_id,
+                    "filename": doc["filename"] if doc else row["filename"],
+                    "tags": doc.get("tags", [t.strip() for t in (row["tags"] or "").split(",") if t.strip()]) if doc else [t.strip() for t in (row["tags"] or "").split(",") if t.strip()],
+                    "snippet": snippet,
+                    "uploaded_at": doc.get("uploaded_at") if doc else None,
+                    "file_size": doc.get("file_size") if doc else 0,
+                    "current_version": doc.get("current_version", 1) if doc else 1,
+                })
+        return {"transcripts": transcripts, "documents": documents}
 
     def waiting_count(self, exclude_id: str | None = None) -> int:
         query = "SELECT COUNT(*) FROM jobs WHERE status = 'waiting'"

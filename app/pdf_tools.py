@@ -186,3 +186,33 @@ def convert_docx_to_pdf(docx_path: Path, output_path: Path) -> int:
     pdf_doc = SimpleDocTemplate(str(output_path), pagesize=letter)
     pdf_doc.build(story)
     return len(pypdf.PdfReader(str(output_path)).pages)
+
+
+def extract_text_from_file(file_path: Path | str) -> str:
+    """Best-effort text extraction from documents (PDF, DOCX, TXT, etc.) for search indexing."""
+    path = Path(file_path)
+    if not path.is_file():
+        return ""
+    suffix = path.suffix.lower()
+    # Image files cannot have text extracted without OCR
+    if suffix in (".jpg", ".jpeg", ".png"):
+        return ""
+    if suffix == ".pdf":
+        try:
+            reader = pypdf.PdfReader(str(path))
+            pages = [page.extract_text() or "" for page in reader.pages]
+            return "\n".join(p for p in pages if p.strip())
+        except Exception:
+            return ""
+    if suffix == ".docx":
+        try:
+            doc = Document(str(path))
+            return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        except Exception:
+            return ""
+    if suffix in (".txt", ".csv", ".rtf", ".odt", ".ods", ".odp", ".doc", ".xls", ".xlsx", ".ppt", ".pptx", ".md", ".json"):
+        try:
+            return path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return ""
+    return ""
