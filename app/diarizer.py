@@ -44,6 +44,62 @@ def is_diarization_available(hf_token: Optional[str] = None) -> Tuple[bool, str]
     return True, "Diarization pipeline available"
 
 
+def _load_pipeline(token: str):
+    import yaml
+    from pyannote.audio import Pipeline
+
+    # 1. Attempt direct load (pyannote 3.x or 4.x when community-1 is accessible)
+    try:
+        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", token=token)
+        if pipeline is not None:
+            return pipeline
+    except TypeError:
+        try:
+            pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=token)
+            if pipeline is not None:
+                return pipeline
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    # 2. Pyannote 4.x compatibility: provide DummyPLDA for AgglomerativeClustering to bypass gated community-1 PLDA requirement
+    try:
+        from huggingface_hub import hf_hub_download
+        from pyannote.audio.core.plda import PLDA
+
+        class _DummyPLDA(PLDA):
+            def __init__(self):
+                pass
+
+        config_yml = hf_hub_download("pyannote/speaker-diarization-3.1", "config.yaml", token=token)
+        with open(config_yml, "r", encoding="utf-8") as fp:
+            config = yaml.load(fp, Loader=yaml.SafeLoader)
+
+        if "pipeline" in config and "params" in config["pipeline"]:
+            clustering = config["pipeline"]["params"].get("clustering")
+            if clustering and clustering != "VBxClustering":
+                config["pipeline"]["params"]["plda"] = _DummyPLDA()
+
+        pipeline = Pipeline.from_pretrained(config, token=token)
+        if pipeline is not None:
+            return pipeline
+    except Exception:
+        pass
+
+    # 3. Fallback: try community-1 directly
+    try:
+        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-community-1", token=token)
+        if pipeline is not None:
+            return pipeline
+    except Exception:
+        pass
+
+    raise RuntimeError(
+        "Failed to initialize pyannote pipeline. Please verify your Hugging Face token and ensure you have accepted model conditions at https://huggingface.co/pyannote/speaker-diarization-3.1 and https://huggingface.co/pyannote/segmentation-3.0"
+    )
+
+
 def diarize_audio(
     wav_path: str | Path,
     hf_token: Optional[str] = None,
@@ -63,23 +119,8 @@ def diarize_audio(
 
     try:
         import torch
-        from pyannote.audio import Pipeline
 
-        try:
-            pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1",
-                token=token,
-            )
-        except TypeError:
-            pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1",
-                use_auth_token=token,
-            )
-
-        if pipeline is None:
-            raise RuntimeError(
-                "Failed to initialize pyannote pipeline. Please verify your Hugging Face token and ensure you have accepted model conditions at https://huggingface.co/pyannote/speaker-diarization-3.1 and https://huggingface.co/pyannote/segmentation-3.0"
-            )
+        pipeline = _load_pipeline(token)
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         pipeline.to(device)
@@ -94,8 +135,15 @@ def diarize_audio(
 
         diarization = pipeline(str(wav_path), **params)
 
+        # Pyannote 4.x returns DiarizeOutput with exclusive_speaker_diarization/speaker_diarization
+        annotation = getattr(
+            diarization,
+            "exclusive_speaker_diarization",
+            getattr(diarization, "speaker_diarization", diarization),
+        )
+
         turns: List[Tuple[float, float, str]] = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
+        for turn, _, speaker in annotation.itertracks(yield_label=True):
             turns.append((float(turn.start), float(turn.end), str(speaker)))
 
         return turns

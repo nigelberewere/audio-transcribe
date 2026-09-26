@@ -63,8 +63,10 @@ class TranscriptionWorker:
             speaker_turns = diarize_audio(wav_path)
             segments = assign_speakers_to_segments(segments, speaker_turns)
             checkpoint.write_text(json.dumps(segments, indent=2), encoding="utf-8")
+        completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        job["completed_at"] = completed_at
         write_outputs(job, segments, job_root / "outputs")
-        self.database.update_job(job["id"], status="done", progress=100, elapsed_seconds=0, eta_seconds=0, completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        self.database.update_job(job["id"], status="done", progress=100, elapsed_seconds=0, eta_seconds=0, completed_at=completed_at)
         transcript_text = "\n".join(s.get("text", "").strip() for s in segments if s.get("text", "").strip())
         self.database.index_transcript(job["id"], job["filename"], job.get("initial_prompt", ""), transcript_text)
 

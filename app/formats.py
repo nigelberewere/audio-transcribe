@@ -63,6 +63,38 @@ def _display_text(paragraph: dict, has_speakers: bool) -> str:
     return f"{prefix}{paragraph['text']}"
 
 
+def format_datetime(value: Any = None) -> str:
+    """Format an ISO timestamp or datetime into a user-friendly string (e.g., 'Sep 26, 2026, 3:42 PM')."""
+    if value is None:
+        dt = datetime.now()
+    elif isinstance(value, (int, float)):
+        dt = datetime.fromtimestamp(value)
+    elif isinstance(value, str):
+        val = value.strip()
+        if not val or val.lower() == "none":
+            dt = datetime.now()
+        else:
+            try:
+                dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            except Exception:
+                try:
+                    dt = datetime.strptime(val, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    dt = datetime.now()
+    elif isinstance(value, datetime):
+        dt = value
+    else:
+        dt = datetime.now()
+
+    if dt.tzinfo is not None:
+        dt = dt.astimezone()
+
+    date_str = f"{dt.strftime('%b')} {dt.day}, {dt.year}"
+    hour = dt.strftime("%I").lstrip("0") or "12"
+    minute_ampm = dt.strftime("%M %p")
+    return f"{date_str}, {hour}:{minute_ampm}"
+
+
 def write_outputs(job: dict, segments: list[dict], output_dir: Path) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = Path(job["filename"]).stem
@@ -87,13 +119,20 @@ def write_outputs(job: dict, segments: list[dict], output_dir: Path) -> list[Pat
         from docx import Document
         from docx.shared import RGBColor
         document = Document(); document.add_heading(job["filename"], 0)
+        raw_date = (
+            job.get("completed_at")
+            or job.get("processed_at")
+            or job.get("updated_at")
+            or job.get("created_at")
+        )
+        date_processed = format_datetime(raw_date)
         metadata = [
-            ("Filename", job["filename"]),
-            ("Date processed", job.get("processed_at", job.get("completed_at", job.get("created_at", datetime.now().isoformat())))),
-            ("Audio duration", format_timestamp(job.get("duration", 0.0))),
-            ("Model used", job.get("selected_model", "unknown")),
-            ("Device / compute type", f"{job.get('device', 'cpu')} / {job.get('compute_type', 'int8')}"),
-            ("Detected language", job.get("detected_language", job.get("language", "auto"))),
+            ("Filename", job.get("filename") or "Unknown"),
+            ("Date processed", date_processed),
+            ("Audio duration", format_timestamp(float(job.get("duration") or 0.0))),
+            ("Model used", job.get("selected_model") or job.get("requested_model") or "unknown"),
+            ("Device / compute type", f"{job.get('device') or 'cpu'} / {job.get('compute_type') or 'int8'}"),
+            ("Detected language", job.get("detected_language") or job.get("language") or "auto"),
             ("Total segment count", str(len(segments))),
         ]
         table = document.add_table(rows=0, cols=2)
@@ -101,7 +140,8 @@ def write_outputs(job: dict, segments: list[dict], output_dir: Path) -> list[Pat
         for label, value in metadata:
             cells = table.add_row().cells
             cells[0].text = label
-            cells[1].text = str(value)
+            val_str = str(value) if value is not None and str(value).strip().lower() != "none" else "—"
+            cells[1].text = val_str
         document.add_paragraph()
         for paragraph in paragraphs:
             para = document.add_paragraph()
