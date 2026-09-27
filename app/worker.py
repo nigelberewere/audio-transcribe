@@ -10,6 +10,7 @@ from .config import Settings
 from .db import Database
 from .diarizer import assign_speakers_to_segments, diarize_audio
 from .formats import write_outputs
+from .notifications import NotificationService
 from .queue_policy import QueuePolicy
 
 LOGGER = logging.getLogger(__name__)
@@ -20,6 +21,7 @@ class TranscriptionWorker:
         self.settings = settings
         self.database = database
         self.policy = QueuePolicy(settings.default_model, settings.fallback_model, settings.queue_threshold)
+        self.notifier = NotificationService(settings, database)
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, name="transcription-worker", daemon=True)
 
@@ -42,33 +44,46 @@ class TranscriptionWorker:
                     self.process(job)
                 except Exception as exc:
                     LOGGER.exception("Job %s failed", job["id"])
-                    self.database.update_job(job["id"], status="failed", error=str(exc))
+                    self.database.update_job(job["id"], status="failed", error=str(exc), completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"))
             else:
                 self.stop_event.wait(1)
 
     def process(self, job: dict) -> None:
-        waiting = self.database.waiting_count(exclude_id=job["id"])
-        model = self.policy.choose_model(job["requested_model"], waiting)
-        self.database.update_job(job["id"], status="processing", selected_model=model, progress=0, error=None)
-        job["selected_model"] = model
-        job_root = self.settings.job_dir / job["id"]
-        job_root.mkdir(parents=True, exist_ok=True)
-        wav_path = job_root / "audio.wav"
-        checkpoint = job_root / "segments.json"
-        convert_to_wav(self.settings.ffmpeg_path, Path(job["source_path"]), wav_path)
-        segments = json.loads(checkpoint.read_text(encoding="utf-8")) if checkpoint.exists() else []
-        self._transcribe(job, model, wav_path, checkpoint, segments)
-        segments = json.loads(checkpoint.read_text(encoding="utf-8"))
-        if job.get("diarization"):
-            speaker_turns = diarize_audio(wav_path)
-            segments = assign_speakers_to_segments(segments, speaker_turns)
-            checkpoint.write_text(json.dumps(segments, indent=2), encoding="utf-8")
-        completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ")
-        job["completed_at"] = completed_at
-        write_outputs(job, segments, job_root / "outputs")
-        self.database.update_job(job["id"], status="done", progress=100, elapsed_seconds=0, eta_seconds=0, completed_at=completed_at)
-        transcript_text = "\n".join(s.get("text", "").strip() for s in segments if s.get("text", "").strip())
-        self.database.index_transcript(job["id"], job["filename"], job.get("initial_prompt", ""), transcript_text)
+        try:
+            waiting = self.database.waiting_count(exclude_id=job["id"])
+            model = self.policy.choose_model(job["requested_model"], waiting)
+            self.database.update_job(job["id"], status="processing", selected_model=model, progress=0, error=None)
+            job["selected_model"] = model
+            job_root = self.settings.job_dir / job["id"]
+            job_root.mkdir(parents=True, exist_ok=True)
+            wav_path = job_root / "audio.wav"
+            checkpoint = job_root / "segments.json"
+            convert_to_wav(self.settings.ffmpeg_path, Path(job["source_path"]), wav_path)
+            segments = json.loads(checkpoint.read_text(encoding="utf-8")) if checkpoint.exists() else []
+            self._transcribe(job, model, wav_path, checkpoint, segments)
+            segments = json.loads(checkpoint.read_text(encoding="utf-8"))
+            if job.get("diarization"):
+                speaker_turns = diarize_audio(wav_path)
+                segments = assign_speakers_to_segments(segments, speaker_turns)
+                checkpoint.write_text(json.dumps(segments, indent=2), encoding="utf-8")
+            completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+            job["completed_at"] = completed_at
+            write_outputs(job, segments, job_root / "outputs")
+            self.database.update_job(job["id"], status="done", progress=100, elapsed_seconds=0, eta_seconds=0, completed_at=completed_at)
+            transcript_text = "\n".join(s.get("text", "").strip() for s in segments if s.get("text", "").strip())
+            self.database.index_transcript(job["id"], job["filename"], job.get("initial_prompt", ""), transcript_text)
+            try:
+                self.notifier.notify_job_completion(job, status="done")
+            except Exception as notify_exc:
+                LOGGER.warning("Failed to dispatch notification for job %s: %s", job["id"], notify_exc)
+        except Exception as exc:
+            if "completed_at" not in job or not job["completed_at"]:
+                job["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+            try:
+                self.notifier.notify_job_completion(job, status="failed", error=exc)
+            except Exception as notify_exc:
+                LOGGER.warning("Failed to dispatch notification for job %s: %s", job["id"], notify_exc)
+            raise
 
     def _transcribe(self, job: dict, model_name: str, wav_path: Path, checkpoint: Path, segments: list[dict]) -> None:
         from faster_whisper import WhisperModel

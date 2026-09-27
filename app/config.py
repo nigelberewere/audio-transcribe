@@ -42,6 +42,16 @@ class Settings:
         self.admin_user = os.getenv("TRANSCRIBE_ADMIN_USER", "")
         self.admin_password = os.getenv("TRANSCRIBE_ADMIN_PASSWORD", "")
         self.env_file = Path(os.getenv("TRANSCRIBE_ENV_FILE", ".env"))
+        self.smtp_host = os.getenv("SMTP_HOST") or os.getenv("TRANSCRIBE_SMTP_HOST", "")
+        self.smtp_port = int(os.getenv("SMTP_PORT") or os.getenv("TRANSCRIBE_SMTP_PORT", "587"))
+        self.smtp_username = os.getenv("SMTP_USERNAME") or os.getenv("TRANSCRIBE_SMTP_USERNAME", "")
+        self.smtp_password = os.getenv("SMTP_PASSWORD") or os.getenv("TRANSCRIBE_SMTP_PASSWORD", "")
+        self.smtp_from_address = os.getenv("SMTP_FROM_ADDRESS") or os.getenv("TRANSCRIBE_SMTP_FROM_ADDRESS", "")
+        tls_val = os.getenv("SMTP_USE_TLS") if os.getenv("SMTP_USE_TLS") is not None else os.getenv("TRANSCRIBE_SMTP_USE_TLS", "true")
+        self.smtp_use_tls = str(tls_val).strip().lower() in ("true", "1", "yes", "on")
+        self.smtp_timeout = float(os.getenv("SMTP_TIMEOUT") or os.getenv("TRANSCRIBE_SMTP_TIMEOUT", "10.0"))
+        default_app_url = f"http://{self.host if self.host != '0.0.0.0' else 'localhost'}:{self.port}"
+        self.app_url = (os.getenv("APP_URL") or os.getenv("TRANSCRIBE_APP_URL", default_app_url)).rstrip("/")
 
     @property
     def db_path(self) -> Path:

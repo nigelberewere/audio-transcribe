@@ -689,8 +689,19 @@ def upload(file: UploadFile = File(...), model: str = Form("auto"), language: st
             pass
     job_id = uuid4().hex; destination = settings.upload_dir / f"{job_id}{extension}"
     with destination.open("wb") as output:
-        while chunk := file.file.read(1024 * 1024): output.write(chunk)
-    database.create_job({"id": job_id, "filename": file.filename, "source_path": str(destination), "requested_model": model, "language": language, "initial_prompt": initial_prompt, "diarization": diarization, "formats": [item.strip() for item in formats.split(",") if item.strip()]})
+        while chunk := file.file.read(1024 * 1024):
+            output.write(chunk)
+    database.create_job({
+        "id": job_id,
+        "filename": file.filename,
+        "source_path": str(destination),
+        "requested_model": model,
+        "language": language,
+        "initial_prompt": initial_prompt,
+        "diarization": diarization,
+        "formats": [item.strip() for item in formats.split(",") if item.strip()],
+        "created_by": user,
+    })
     return database.get_job(job_id)
 
 

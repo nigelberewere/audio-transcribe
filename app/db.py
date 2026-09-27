@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     error TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    completed_at TEXT
+    completed_at TEXT,
+    created_by TEXT
 );
 CREATE TABLE IF NOT EXISTS users (
     username TEXT PRIMARY KEY,
@@ -119,6 +120,9 @@ class Database:
             doc_columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)")}
             if "source_document_ids" not in doc_columns:
                 connection.execute("ALTER TABLE documents ADD COLUMN source_document_ids TEXT")
+            job_columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+            if "created_by" not in job_columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN created_by TEXT")
 
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30)
@@ -129,8 +133,8 @@ class Database:
         timestamp = now()
         with self.connect() as connection:
             connection.execute(
-                "INSERT INTO jobs (id, filename, source_path, status, requested_model, language, initial_prompt, diarization, formats, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (job["id"], job["filename"], job["source_path"], "waiting", job.get("requested_model", "auto"), job.get("language", "auto"), job.get("initial_prompt", ""), int(job.get("diarization", False)), json.dumps(job.get("formats", [])), timestamp, timestamp),
+                "INSERT INTO jobs (id, filename, source_path, status, requested_model, language, initial_prompt, diarization, formats, created_at, updated_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (job["id"], job["filename"], job["source_path"], "waiting", job.get("requested_model", "auto"), job.get("language", "auto"), job.get("initial_prompt", ""), int(job.get("diarization", False)), json.dumps(job.get("formats", [])), timestamp, timestamp, job.get("created_by")),
             )
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
@@ -171,7 +175,7 @@ class Database:
                 (actor, action, target, details, now()),
             )
 
-    def list_audit_log(self, actor: str | None = None, action: str | None = None, limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], bool, list[str], list[str]]:
+    def list_audit_log(self, actor: str | None = None, action: str | None = None, limit: int = 50, offset: int = 0, target: str | None = None) -> tuple[list[dict[str, Any]], bool, list[str], list[str]]:
         filters = []
         values: list[Any] = []
         if actor:
@@ -180,6 +184,9 @@ class Database:
         if action:
             filters.append("action = ?")
             values.append(action)
+        if target:
+            filters.append("target = ?")
+            values.append(target)
         where = f" WHERE {' AND '.join(filters)}" if filters else ""
         page_size = max(1, min(limit, 100))
         query = f"SELECT * FROM audit_log{where} ORDER BY id LIMIT ? OFFSET ?"

@@ -40,7 +40,7 @@ async function loadJobs() {
     const filtered = jobs.filter(job => job.status !== 'deleted');
     filtered.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
     $('jobs').innerHTML = filtered.length
-      ? filtered.map(job => `<article class="job">
+      ? filtered.map(job => `<article class="job" id="job-${job.id}">
           <div>
             <h3>${escapeHtml(job.filename)}</h3>
             <div class="meta">${job.status === 'waiting' ? `Queue position ${job.queue_position}` : job.status} · requested ${job.requested_model} · used ${job.selected_model || 'pending'}${job.diarization ? ' · <span class="tag-diarization">Diarized</span>' : ''}</div>
