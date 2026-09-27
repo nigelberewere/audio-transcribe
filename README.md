@@ -8,20 +8,34 @@ FastAPI serves the browser UI and authenticated JSON API. SQLite stores job stat
 
 `config.json` controls `default_model`, `fallback_model`, `queue_threshold`, and `auto_delete_days` (zero means disabled). Environment variables with the `TRANSCRIBE_` prefix override these values. Source recordings and generated outputs live under `TRANSCRIBE_DATA_DIR`.
 
-## Windows Server setup
+## Quick Start & Easy Setup
 
-1. Install Python 3.11 or newer and ffmpeg. For example, with winget: `winget install Gyan.FFmpeg`.
-2. Download NSSM, place `nssm.exe` in this project directory, and open PowerShell as Administrator.
-3. Set an initial password and run the installer:
+### Option 1: 1-Click Interactive Setup (Recommended)
+Simply double-click **`setup.bat`** (or run `.\setup.ps1` in PowerShell).
 
+The setup wizard automatically:
+- Checks and verifies Python (3.11+).
+- Locates or helps you install FFmpeg via winget.
+- Creates `.venv` and installs all dependencies.
+- Generates a secure `.env` configuration file.
+- Provides interactive choices to launch the app locally, cache models, or install as a Windows Background Service.
+
+### Option 2: 1-Click Everyday Run
+Double-click **`start.bat`**. It initializes the environment if needed, launches the server on port `8420`, and opens your default browser at `http://localhost:8420/`.
+
+---
+
+## Windows Background Service Setup (Production)
+
+To run as an unattended background service that starts on Windows boot:
+
+1. Right-click **`setup.bat`** and choose **Run as administrator** (or open an elevated PowerShell window).
+2. Choose Option `3` to install as a Windows Service, or run:
 ```powershell
-$env:TRANSCRIBE_ADMIN_PASSWORD = 'use-a-long-random-password'
-.\install-service.ps1 -DataDir 'D:\LegalTranscription' -FfmpegPath 'C:\ffmpeg\bin\ffmpeg.exe'
+.\install-service.ps1 -Port 8420
 ```
+The installer automatically configures NSSM, pre-caches the Whisper AI models, opens the Windows Firewall port, and starts the service.
 
-The installer creates `.venv`, installs requirements, pre-caches `large-v3` and `medium` from Hugging Face, registers an automatic-restart NSSM service, and opens the port only for Domain and Private firewall profiles. Model caching requires setup-time internet access. After caching, inference is local and can run offline.
-
-Change the generated service environment or config before production. Replace the default session secret with a private value using `TRANSCRIBE_SESSION_SECRET`. Confirm that the chosen data volume has enough space for uploads, normalized WAV files, checkpoints, and outputs.
 
 The service starts at boot without a logged-in user. Check `Get-Service OfflineLegalTranscription`, `storage\logs\transcribe.log`, and the NSSM stdout/stderr files when diagnosing startup.
 
