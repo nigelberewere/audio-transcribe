@@ -1,7 +1,9 @@
 from pathlib import Path
 import json
+import logging
 import os
 
+LOGGER = logging.getLogger(__name__)
 
 def _load_dotenv(path: Path | None = None) -> None:
     env_file = path or Path(".env")
@@ -17,8 +19,8 @@ def _load_dotenv(path: Path | None = None) -> None:
             val = val.strip().strip("'\"")
             if key and key not in os.environ:
                 os.environ[key] = val
-    except Exception:
-        pass
+    except (OSError, UnicodeError) as exc:
+        LOGGER.warning("Could not load environment file %s: %s", env_file, exc)
 
 
 class Settings:

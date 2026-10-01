@@ -83,6 +83,16 @@ def test_save_chunks_and_assemble(recording_test_env):
     assert out_file.read_bytes() == chunk1 + chunk2 + chunk3
 
 
+def test_assemble_rejects_missing_chunk(recording_test_env):
+    draft_mgr = recording_test_env["draft_manager"]
+    session_id = "test_session_missing_chunk"
+    draft_mgr.save_chunk(session_id, 0, b"first", "alice")
+    draft_mgr.save_chunk(session_id, 2, b"third", "alice")
+
+    with pytest.raises(ValueError, match="incomplete"):
+        draft_mgr.assemble_recording(session_id, "alice", recording_test_env["settings"].upload_dir / "out.webm")
+
+
 def test_finalize_complete_recording_creates_valid_job(recording_test_env):
     session_id = "rec_session_finalize_ok"
     database = recording_test_env["database"]
@@ -117,7 +127,6 @@ def test_finalize_complete_recording_creates_valid_job(recording_test_env):
         language="en",
         initial_prompt="Quarterly planning",
         diarization=True,
-        hf_token="",
         formats="txt,srt,docx",
         user="alice",
     )

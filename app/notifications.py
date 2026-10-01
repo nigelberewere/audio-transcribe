@@ -266,7 +266,7 @@ class NotificationService:
             LOGGER.warning("Test notification email to %s failed: %s", masked, err_msg)
             if self.database:
                 self.database.add_audit_log(actor=actor, action="test_notification_failed", target=masked, details=f"Error: {categorize_error(err_msg)}")
-            return False, f"SMTP Error: {err_msg}"
+            return False, "Unable to send test email. Check the notification settings and server logs."
 
     def notify_job_completion(
         self, job: dict[str, Any], status: str, error: Any = None, job_type: str = "transcription"

@@ -91,7 +91,7 @@ async function load() {
         <div class="document-lead">
           <input type="checkbox" class="doc-checkbox" data-id="${document.id}" ${selectedDocIds.has(document.id) ? 'checked' : ''} aria-label="Select ${escapeHtml(document.filename)}">
           <div>
-            <button class="document-name" onclick="showVersions('${document.id}')">${escapeHtml(document.filename)}</button>
+            <button class="document-name" data-document-id="${document.id}">${escapeHtml(document.filename)}</button>
             <div class="meta">
               ${formatBytes(document.file_size)} · ${escapeHtml(document.uploaded_by)} · ${formatDate(document.uploaded_at)} · v${document.current_version}
               ${isDerived ? ' · <span class="tag-derived">Derived</span>' : ''}
@@ -101,8 +101,8 @@ async function load() {
         </div>
         <div class="document-actions">
           <a class="quiet" href="/api/documents/${document.id}/download">Download</a>
-          <button class="quiet" onclick="editTags('${document.id}', '${escapeHtml(document.tags.join(', '))}')">Tags</button>
-          <button class="quiet" onclick="removeDocument('${document.id}')">Delete</button>
+          <button class="quiet edit-tags" data-document-id="${document.id}" data-current-tags="${escapeHtml(document.tags.join(', '))}">Tags</button>
+          <button class="quiet delete-document" data-document-id="${document.id}">Delete</button>
         </div>
       </article>`;
     }).join('');
@@ -136,6 +136,16 @@ async function load() {
       else selectedDocIds.delete(id);
       updateSelectionUI();
     };
+  });
+
+  document.querySelectorAll('.document-name').forEach(button => {
+    button.onclick = () => showVersions(button.dataset.documentId);
+  });
+  document.querySelectorAll('.edit-tags').forEach(button => {
+    button.onclick = () => editTags(button.dataset.documentId, button.dataset.currentTags || '');
+  });
+  document.querySelectorAll('.delete-document').forEach(button => {
+    button.onclick = () => removeDocument(button.dataset.documentId);
   });
 
   updateSelectionUI();

@@ -99,6 +99,39 @@ def test_list_jobs_most_recent_first(tmp_path):
     assert jobs[1]["id"] == "job-old"
 
 
+def test_job_claim_and_restart_recovery_are_atomic(tmp_path):
+    settings = Settings()
+    settings.data_dir = tmp_path / "storage"
+    database = Database(settings.db_path)
+    database.create_job({
+        "id": "job-recover",
+        "filename": "recover.mp3",
+        "source_path": "recover.mp3",
+        "requested_model": "tiny",
+        "language": "en",
+        "initial_prompt": "",
+        "diarization": False,
+        "formats": ["txt"],
+    })
+
+    claimed = database.claim_next_waiting()
+    assert claimed["id"] == "job-recover"
+    assert database.get_job("job-recover")["status"] == "processing"
+
+    assert database.recover_processing_jobs() == 1
+    assert database.get_job("job-recover")["status"] == "waiting"
+    assert database.claim_next_waiting()["id"] == "job-recover"
+
+
+def test_database_rejects_dynamic_sql_field_names(tmp_path):
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.create_user("member", "hash")
+    with pytest.raises(ValueError):
+        database.update_user("member", **{"role = 'admin', password_hash": "bad"})
+    with pytest.raises(ValueError):
+        database.update_job("missing", **{"status = 'done'": "bad"})
+
+
 def test_api_jobs_endpoint_ordering_and_queue_positions(tmp_path, monkeypatch):
     from app import main
     settings = Settings()
@@ -245,7 +278,7 @@ def test_api_jobs_user_isolation_and_queue_positions(tmp_path, monkeypatch):
     assert res == {"ok": True}
 
 
-def test_diarization_status_and_upload(tmp_path, monkeypatch):
+def test_diarization_status_and_upload_does_not_accept_user_token(tmp_path, monkeypatch):
     import os
     from io import BytesIO
     from fastapi import UploadFile
@@ -266,7 +299,7 @@ def test_diarization_status_and_upload(tmp_path, monkeypatch):
     assert "available" in status
     assert "has_token" in status
 
-    # Upload endpoint properly sets diarization flag and environment token
+    # Upload endpoint keeps diarization settings but never changes the global token.
     file_obj = UploadFile(filename="meeting.mp3", file=BytesIO(b"audio content"))
     job = main.upload(
         file=file_obj,
@@ -274,13 +307,31 @@ def test_diarization_status_and_upload(tmp_path, monkeypatch):
         language="en",
         initial_prompt="",
         diarization=True,
-        hf_token="hf_test_token_xyz",
         formats="txt,srt",
         user="user",
     )
     assert job["diarization"] is True
-    assert os.environ.get("HF_TOKEN") == "hf_test_token_xyz"
-    monkeypatch.delenv("HF_TOKEN", raising=False)
+    assert os.environ.get("HF_TOKEN") is None
+
+
+def test_audio_upload_enforces_server_side_size_limit(tmp_path, monkeypatch):
+    from io import BytesIO
+    from fastapi import HTTPException, UploadFile
+    from app import main
+
+    settings = Settings()
+    settings.data_dir = tmp_path / "storage"
+    settings.ensure_directories()
+    database = Database(settings.db_path)
+    monkeypatch.setattr(main, "database", database)
+    monkeypatch.setattr(main, "settings", settings)
+    monkeypatch.setattr(main, "MAX_AUDIO_SIZE_BYTES", 4)
+
+    with pytest.raises(HTTPException) as exc:
+        main.upload(UploadFile(BytesIO(b"12345"), filename="too-large.mp3"), user="user")
+
+    assert exc.value.status_code == 400
+    assert not list(settings.upload_dir.iterdir())
 
 
 def test_transcription_heartbeat_interpolates_progress_smoothly(tmp_path, monkeypatch):
@@ -384,4 +435,4 @@ def test_transcription_heartbeat_interpolates_progress_smoothly(tmp_path, monkey
     final_job = database.get_job(job_id)
     assert final_job["status"] == "done"
     assert final_job["progress"] == 100
-
+

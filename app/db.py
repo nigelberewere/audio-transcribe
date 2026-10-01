@@ -1,13 +1,24 @@
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
+LOGGER = logging.getLogger(__name__)
+USER_UPDATE_FIELDS = {"role", "active", "first_name", "surname", "email", "password_hash"}
+JOB_UPDATE_FIELDS = {
+    "status", "selected_model", "progress", "elapsed_seconds", "eta_seconds", "error",
+    "completed_at", "duration", "detected_language", "device", "compute_type", "created_at",
+}
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
+
+
+    
     filename TEXT NOT NULL,
     source_path TEXT NOT NULL,
     status TEXT NOT NULL,
@@ -24,7 +35,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     completed_at TEXT,
-    created_by TEXT
+    created_by TEXT,
+    duration REAL,
+    detected_language TEXT,
+    device TEXT,
+    compute_type TEXT
 );
 CREATE TABLE IF NOT EXISTS users (
     username TEXT PRIMARY KEY,
@@ -126,8 +141,16 @@ class Database:
             if "source_document_ids" not in doc_columns:
                 connection.execute("ALTER TABLE documents ADD COLUMN source_document_ids TEXT")
             job_columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
-            if "created_by" not in job_columns:
-                connection.execute("ALTER TABLE jobs ADD COLUMN created_by TEXT")
+            job_migrations = {
+                "created_by": "ALTER TABLE jobs ADD COLUMN created_by TEXT",
+                "duration": "ALTER TABLE jobs ADD COLUMN duration REAL",
+                "detected_language": "ALTER TABLE jobs ADD COLUMN detected_language TEXT",
+                "device": "ALTER TABLE jobs ADD COLUMN device TEXT",
+                "compute_type": "ALTER TABLE jobs ADD COLUMN compute_type TEXT",
+            }
+            for name, statement in job_migrations.items():
+                if name not in job_columns:
+                    connection.execute(statement)
 
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30)
@@ -228,6 +251,11 @@ class Database:
         return [dict(row) for row in rows[:page_size]], len(rows) > page_size, actors, actions
 
     def update_user(self, username: str, **fields: Any) -> None:
+        invalid_fields = set(fields) - USER_UPDATE_FIELDS
+        if invalid_fields:
+            raise ValueError(f"Unsupported user fields: {', '.join(sorted(invalid_fields))}")
+        if not fields:
+            return
         assignments = ", ".join(f"{key} = ?" for key in fields)
         with self.connect() as connection:
             connection.execute(f"UPDATE users SET {assignments} WHERE username = ?", [*fields.values(), username])
@@ -304,7 +332,7 @@ class Database:
             text = extract_text_from_file(document.get("storage_path", ""))
             self.index_document(document["id"], document["filename"], tags, text)
         except Exception:
-            pass
+            LOGGER.warning("Could not index document %s", document["id"], exc_info=True)
 
     def get_document(self, document_id: str, include_deleted: bool = False) -> dict[str, Any] | None:
         query = "SELECT d.*, GROUP_CONCAT(t.tag) AS tags FROM documents d LEFT JOIN document_tags t ON t.document_id = d.id WHERE d.id = ?"
@@ -341,7 +369,7 @@ class Database:
             text = extract_text_from_file(version.get("storage_path", ""))
             self.index_document(document_id, doc["filename"] if doc else Path(version["storage_path"]).name, doc.get("tags", []) if doc else [], text)
         except Exception:
-            pass
+            LOGGER.warning("Could not reindex document %s", document_id, exc_info=True)
 
     def list_document_versions(self, document_id: str) -> list[dict[str, Any]]:
         with self.connect() as connection:
@@ -359,7 +387,7 @@ class Database:
                 text = extract_text_from_file(doc.get("storage_path", ""))
                 self.index_document(document_id, doc["filename"], tags, text)
             except Exception:
-                pass
+                LOGGER.warning("Could not reindex document %s after tag update", document_id, exc_info=True)
 
     def set_document_deleted(self, document_id: str, deleted: bool) -> None:
         with self.connect() as connection:
@@ -374,7 +402,7 @@ class Database:
                     text = extract_text_from_file(doc.get("storage_path", ""))
                     self.index_document(document_id, doc["filename"], doc.get("tags", []), text)
                 except Exception:
-                    pass
+                    LOGGER.warning("Could not reindex document %s after deletion change", document_id, exc_info=True)
 
     def document_stats(self) -> dict[str, int]:
         today = datetime.now(timezone.utc).date().isoformat()
@@ -410,6 +438,9 @@ class Database:
         return [self._decode(row) for row in rows]
 
     def update_job(self, job_id: str, **fields: Any) -> None:
+        invalid_fields = set(fields) - JOB_UPDATE_FIELDS
+        if invalid_fields:
+            raise ValueError(f"Unsupported job fields: {', '.join(sorted(invalid_fields))}")
         fields["updated_at"] = now()
         assignments = ", ".join(f"{key} = ?" for key in fields)
         values = [json.dumps(value) if key == "formats" else value for key, value in fields.items()]
@@ -514,6 +545,28 @@ class Database:
             row = connection.execute("SELECT * FROM jobs WHERE status = 'waiting' ORDER BY created_at LIMIT 1").fetchone()
         return self._decode(row) if row else None
 
+    def claim_next_waiting(self) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE status = 'waiting' ORDER BY created_at LIMIT 1"
+            ).fetchone()
+            if not row:
+                return None
+            connection.execute(
+                "UPDATE jobs SET status = 'processing', updated_at = ? WHERE id = ? AND status = 'waiting'",
+                (now(), row["id"]),
+            )
+        return self._decode(row)
+
+    def recover_processing_jobs(self) -> int:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "UPDATE jobs SET status = 'waiting', error = NULL, updated_at = ? WHERE status = 'processing'",
+                (now(),),
+            )
+            return cursor.rowcount
+
     def get_setting(self, key: str, default: str | None = None) -> str | None:
         with self.connect() as connection:
             row = connection.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
@@ -551,6 +604,10 @@ class Database:
     @staticmethod
     def _decode(row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
-        result["formats"] = json.loads(result["formats"])
+        try:
+            result["formats"] = json.loads(result["formats"])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            LOGGER.warning("Ignoring corrupt formats value for job %s", result.get("id"))
+            result["formats"] = []
         result["diarization"] = bool(result["diarization"])
         return result

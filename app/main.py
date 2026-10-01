@@ -1,5 +1,3 @@
-import hashlib
-import hmac
 import logging
 import os
 import secrets
@@ -11,7 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -175,6 +173,7 @@ def login(username: str = Form(...), password: str = Form(...)):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     token = secrets.token_urlsafe(32)
     sessions[token] = {"username": username, "role": account["role"]}
+    database.add_audit_log(username, "login_succeeded", None, None)
     first_name = (account.get("first_name") or "").strip()
     surname = (account.get("surname") or "").strip()
     full_name = f"{first_name} {surname}".strip()
@@ -186,7 +185,6 @@ def login(username: str = Form(...), password: str = Form(...)):
         "email": account.get("email") or "",
         "role": account["role"],
     }
-    from fastapi.responses import JSONResponse
     result = JSONResponse(response)
     result.set_cookie("session", token, httponly=True, samesite="strict")
     return result
@@ -201,11 +199,11 @@ def admin_login(username: str = Form(...), password: str = Form(...)):
         raise HTTPException(status_code=401, detail="Invalid administrator credentials")
     token = secrets.token_urlsafe(32)
     sessions[token] = {"username": username, "role": "admin"}
+    database.add_audit_log(username, "login_succeeded", None, None)
     first_name = (account.get("first_name") or "").strip()
     surname = (account.get("surname") or "").strip()
     full_name = f"{first_name} {surname}".strip()
     display_name = full_name if full_name else username
-    from fastapi.responses import JSONResponse
     result = JSONResponse({
         "ok": True,
         "username": username,
@@ -239,8 +237,10 @@ def me(user: str = Depends(current_user)):
 @app.post("/api/logout")
 def logout(session: str | None = Cookie(default=None), user: str = Depends(current_user)):
     sessions.pop(session, None)
-    from fastapi.responses import JSONResponse
-    response = JSONResponse({"ok": True}); response.delete_cookie("session"); return response
+    database.add_audit_log(user, "logout", None, None)
+    response = JSONResponse({"ok": True})
+    response.delete_cookie("session")
+    return response
 
 
 @app.get("/api/jobs")
@@ -287,6 +287,7 @@ ALLOWED_DOCUMENT_EXTENSIONS = {
     ".odt", ".ods", ".odp", ".jpg", ".jpeg", ".png"
 }
 MAX_DOCUMENT_SIZE_BYTES = 50 * 1024 * 1024  # 50MB
+MAX_AUDIO_SIZE_BYTES = 50 * 1024 * 1024  # 50MB
 
 
 def _validate_document_filename(filename: str | None) -> tuple[str, str]:
@@ -299,6 +300,20 @@ def _validate_document_filename(filename: str | None) -> tuple[str, str]:
             detail=f"File type '{ext or 'unknown'}' is not allowed. Allowed types: {types_list}."
         )
     return cleaned, ext
+
+
+def _validate_pdf_output_filename(filename: str) -> str:
+    cleaned = filename.strip()
+    if (
+        not cleaned
+        or cleaned in {".", ".."}
+        or Path(cleaned).name != cleaned
+        or any(separator in cleaned for separator in ("/", "\\"))
+    ):
+        raise HTTPException(status_code=400, detail="Output filename must be a simple PDF filename.")
+    if len(cleaned) > 255:
+        raise HTTPException(status_code=400, detail="Output filename is too long.")
+    return cleaned if cleaned.lower().endswith(".pdf") else f"{cleaned}.pdf"
 
 
 @app.get("/api/search")
@@ -323,6 +338,7 @@ def create_document_folder(name: str = Form(...), parent_folder_id: str | None =
     if not name:
         raise HTTPException(status_code=400, detail="Folder name is required")
     folder = database.create_folder(uuid4().hex, name, _document_folder(parent_folder_id), user)
+    database.add_audit_log(user, "folder_created", folder["id"], f"name length: {len(name)}")
     return folder
 
 
@@ -353,7 +369,12 @@ def upload_document(file: UploadFile = File(...), folder_id: str | None = Form(N
 
     document = {"id": document_id, "filename": filename, "storage_path": str(target), "folder_id": folder_id, "uploaded_by": user, "uploaded_at": uploaded_at, "file_size": size, "mime_type": file.content_type, "current_version": 1, "deleted": 0}
     version = {"id": uuid4().hex, "document_id": document_id, "version_number": 1, "storage_path": str(target), "uploaded_by": user, "uploaded_at": uploaded_at, "change_note": None}
-    database.create_document(document, version, _tags(tags))
+    try:
+        database.create_document(document, version, _tags(tags))
+    except Exception:
+        shutil.rmtree(settings.documents_storage_path / document_id, ignore_errors=True)
+        logger.exception("Could not register uploaded document %s", document_id)
+        raise HTTPException(status_code=500, detail="Could not save document metadata.")
     database.add_audit_log(user, "document_uploaded", document_id, f"filename: {document['filename']}")
     return database.get_document(document_id)
 
@@ -413,7 +434,12 @@ def upload_document_version(document_id: str, file: UploadFile = File(...), chan
 
     uploaded_at = now()
     version = {"id": uuid4().hex, "document_id": document_id, "version_number": version_number, "storage_path": str(target), "uploaded_by": user, "uploaded_at": uploaded_at, "change_note": change_note.strip() or None}
-    database.add_document_version(document_id, version, size, file.content_type or document["mime_type"])
+    try:
+        database.add_document_version(document_id, version, size, file.content_type or document["mime_type"])
+    except Exception:
+        shutil.rmtree(destination, ignore_errors=True)
+        logger.exception("Could not register document version for %s", document_id)
+        raise HTTPException(status_code=500, detail="Could not save document version metadata.")
     database.add_audit_log(user, "document_version_added", document_id, f"version: {version_number}")
     return database.get_document(document_id)
 
@@ -422,7 +448,9 @@ def upload_document_version(document_id: str, file: UploadFile = File(...), chan
 def update_document_tags(document_id: str, tags: str = Form(""), user: str = Depends(current_user)):
     if not database.get_document(document_id):
         raise HTTPException(status_code=404, detail="Document not found")
-    database.set_document_tags(document_id, _tags(tags))
+    normalized_tags = _tags(tags)
+    database.set_document_tags(document_id, normalized_tags)
+    database.add_audit_log(user, "document_tags_updated", document_id, f"tag count: {len(normalized_tags)}")
     return database.get_document(document_id)
 
 
@@ -476,15 +504,15 @@ def merge_documents_endpoint(req: MergeDocumentsRequest, user: str = Depends(cur
     if not out_filename:
         stem = Path(docs[0]["filename"]).stem
         out_filename = f"{stem}_merged.pdf"
-    if not out_filename.lower().endswith(".pdf"):
-        out_filename += ".pdf"
+    out_filename = _validate_pdf_output_filename(out_filename)
 
     target = destination / out_filename
     try:
         pdf_tools.merge_pdfs([Path(d["storage_path"]) for d in docs], target)
-    except Exception as exc:
+    except Exception:
         shutil.rmtree(settings.documents_storage_path / new_id, ignore_errors=True)
-        raise HTTPException(status_code=400, detail=f"Merge failed: {exc}")
+        logger.exception("PDF merge failed for output %s", new_id)
+        raise HTTPException(status_code=400, detail="Merge failed.")
 
     size = target.stat().st_size
     uploaded_at = now()
@@ -533,9 +561,10 @@ def split_document_endpoint(req: SplitDocumentRequest, user: str = Depends(curre
     temp_dir = settings.documents_storage_path / "_temp_split" / temp_id
     try:
         split_results = pdf_tools.split_pdf(Path(doc["storage_path"]), temp_dir, doc["filename"], req.page_ranges)
-    except Exception as exc:
+    except Exception:
         shutil.rmtree(temp_dir, ignore_errors=True)
-        raise HTTPException(status_code=400, detail=f"Split failed: {exc}")
+        logger.exception("PDF split failed for document %s", doc_id)
+        raise HTTPException(status_code=400, detail="Split failed.")
 
     created_docs = []
     for split_path, page_count, suggested_name in split_results:
@@ -601,9 +630,10 @@ def watermark_documents_endpoint(req: WatermarkDocumentRequest, user: str = Depe
 
         try:
             pdf_tools.watermark_pdf(Path(doc["storage_path"]), target, text)
-        except Exception as exc:
+        except Exception:
             shutil.rmtree(settings.documents_storage_path / new_id, ignore_errors=True)
-            raise HTTPException(status_code=400, detail=f"Watermarking failed: {exc}")
+            logger.exception("PDF watermarking failed for output %s", new_id)
+            raise HTTPException(status_code=400, detail="Watermarking failed.")
 
         size = target.stat().st_size
         uploaded_at = now()
@@ -630,7 +660,7 @@ def watermark_documents_endpoint(req: WatermarkDocumentRequest, user: str = Depe
             "change_note": f"Watermarked with '{text}'",
         }
         database.create_document(doc_record, version_record, [])
-        database.add_audit_log(user, "document_watermarked", new_id, f"source: {doc_id}, text: {text}")
+        database.add_audit_log(user, "document_watermarked", new_id, f"source: {doc_id}, text length: {len(text)}")
         created_docs.append(database.get_document(new_id))
 
     return {"documents": created_docs}
@@ -673,9 +703,10 @@ def convert_document_endpoint(req: ConvertDocumentRequest, user: str = Depends(c
     except HTTPException:
         shutil.rmtree(settings.documents_storage_path / new_id, ignore_errors=True)
         raise
-    except Exception as exc:
+    except Exception:
         shutil.rmtree(settings.documents_storage_path / new_id, ignore_errors=True)
-        raise HTTPException(status_code=400, detail=f"Conversion failed: {exc}")
+        logger.exception("Document conversion failed for output %s", new_id)
+        raise HTTPException(status_code=400, detail="Conversion failed.")
 
     size = target.stat().st_size
     uploaded_at = now()
@@ -734,32 +765,29 @@ def diarization_status(user: str = Depends(current_user)):
 
 
 @app.post("/api/jobs")
-def upload(file: UploadFile = File(...), model: str = Form("auto"), language: str = Form("auto"), initial_prompt: str = Form(""), diarization: bool = Form(False), hf_token: str = Form(""), formats: str = Form("txt,txt_timestamps,srt,vtt,docx,json"), user: str = Depends(current_user)):
+def upload(file: UploadFile = File(...), model: str = Form("auto"), language: str = Form("auto"), initial_prompt: str = Form(""), diarization: bool = Form(False), formats: str = Form("txt,txt_timestamps,srt,vtt,docx,json"), user: str = Depends(current_user)):
     extension = Path(file.filename or "").suffix.lower()
     if extension not in SUPPORTED_EXTENSIONS:
         raise HTTPException(status_code=415, detail=f"Unsupported format. Allowed: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
-    if hf_token and hf_token.strip():
-        token_val = hf_token.strip()
-        os.environ["HF_TOKEN"] = token_val
-        try:
-            env_file = getattr(settings, "env_file", Path(".env"))
-            if env_file.exists():
-                lines = []
-                for line in env_file.read_text(encoding="utf-8").splitlines():
-                    if line.startswith("HF_TOKEN="):
-                        lines.append(f"HF_TOKEN={token_val}")
-                    else:
-                        lines.append(line)
-                env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        except Exception:
-            pass
-    job_id = uuid4().hex; destination = settings.upload_dir / f"{job_id}{extension}"
-    with destination.open("wb") as output:
-        while chunk := file.file.read(1024 * 1024):
-            output.write(chunk)
+    job_id = uuid4().hex
+    destination = settings.upload_dir / f"{job_id}{extension}"
+    size = 0
+    try:
+        with destination.open("wb") as output:
+            while chunk := file.file.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_AUDIO_SIZE_BYTES:
+                    raise ValueError("File exceeds maximum allowed size of 50MB.")
+                output.write(chunk)
+    except Exception as exc:
+        destination.unlink(missing_ok=True)
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=400, detail=str(exc))
+        raise
+    clean_filename = Path(file.filename or f"recording{extension}").name
     database.create_job({
         "id": job_id,
-        "filename": file.filename,
+        "filename": clean_filename,
         "source_path": str(destination),
         "requested_model": model,
         "language": language,
@@ -768,7 +796,7 @@ def upload(file: UploadFile = File(...), model: str = Form("auto"), language: st
         "formats": [item.strip() for item in formats.split(",") if item.strip()],
         "created_by": user,
     })
-    database.add_audit_log(user, "job_created", job_id, f"filename: {file.filename}")
+    database.add_audit_log(user, "job_created", job_id, f"filename: {clean_filename}")
     return database.get_job(job_id)
 
 
@@ -782,6 +810,7 @@ def upload_recording_chunk(
     try:
         content = chunk.file.read()
         result = draft_manager.save_chunk(session_id, chunk_index, content, user)
+        database.add_audit_log(user, "recording_chunk_uploaded", session_id, f"chunk: {chunk_index}")
         return {"ok": True, **result}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -797,7 +826,6 @@ def finalize_recording(
     language: str = Form("auto"),
     initial_prompt: str = Form(""),
     diarization: bool = Form(False),
-    hf_token: str = Form(""),
     formats: str = Form("txt,txt_timestamps,srt,vtt,docx,json"),
     user: str = Depends(current_user),
 ):
@@ -805,23 +833,7 @@ def finalize_recording(
     language = language if isinstance(language, str) else "auto"
     initial_prompt = initial_prompt if isinstance(initial_prompt, str) else ""
     diarization = diarization if isinstance(diarization, bool) else False
-    token_str = hf_token.strip() if isinstance(hf_token, str) else ""
     formats_str = formats if isinstance(formats, str) else "txt,txt_timestamps,srt,vtt,docx,json"
-
-    if token_str:
-        os.environ["HF_TOKEN"] = token_str
-        try:
-            env_file = getattr(settings, "env_file", Path(".env"))
-            if env_file.exists():
-                lines = []
-                for line in env_file.read_text(encoding="utf-8").splitlines():
-                    if line.startswith("HF_TOKEN="):
-                        lines.append(f"HF_TOKEN={token_str}")
-                    else:
-                        lines.append(line)
-                env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        except Exception:
-            pass
 
     job_id = uuid4().hex
     clean_filename = Path(filename if isinstance(filename, str) else "meeting_recording.webm").name
@@ -855,6 +867,7 @@ def finalize_recording(
         "created_by": user,
     })
     database.add_audit_log(user, "job_created", job_id, f"filename: {clean_filename}")
+    database.add_audit_log(user, "recording_finalized", session_id, f"job: {job_id}")
     draft_manager.delete_session(session_id, user)
     return database.get_job(job_id)
 
@@ -863,6 +876,7 @@ def finalize_recording(
 def cancel_recording(session_id: str, user: str = Depends(current_user)):
     try:
         draft_manager.delete_session(session_id, user)
+        database.add_audit_log(user, "recording_cancelled", session_id, None)
         return {"ok": True}
     except PermissionError:
         raise HTTPException(status_code=403, detail="Access denied")
@@ -900,6 +914,7 @@ def edit_preview(job_id: str, edit: TranscriptEdit, user: str = Depends(current_
     _check_job_access(job, user)
     target = settings.job_dir / job_id / "edited.txt"; target.parent.mkdir(parents=True, exist_ok=True); target.write_text(edit.text, encoding="utf-8")
     database.index_transcript(job_id, job["filename"], job.get("initial_prompt", ""), edit.text)
+    database.add_audit_log(user, "transcript_edited", job_id, f"text length: {len(edit.text)}")
     return {"ok": True}
 
 
@@ -916,7 +931,6 @@ def download(job_id: str, filename: str, user: str = Depends(current_user)):
 
 @app.delete("/api/jobs/{job_id}")
 def delete_job(job_id: str, user: str = Depends(current_user)):
-    import shutil
     job = database.get_job(job_id)
     if not job: raise HTTPException(404, "Job not found")
     _check_job_access(job, user)
@@ -1024,6 +1038,9 @@ def update_admin_user(
         fields["email"] = email.strip().lower()
     if fields:
         database.update_user(username, **fields)
+        profile_fields = {name for name in fields if name in {"first_name", "surname", "email"}}
+        if profile_fields:
+            database.add_audit_log(admin, "user_profile_updated", username, f"fields: {', '.join(sorted(profile_fields))}")
         if isinstance(role, str) and role != account["role"]:
             database.add_audit_log(admin, "user_role_changed", username, f"{account['role']} -> {role}")
         if isinstance(active, int) and active == 0 and account["active"]:
@@ -1106,9 +1123,10 @@ def update_log_settings(payload: LogRetentionPayload, admin: str = Depends(curre
 
 
 @app.post("/api/admin/logs/cleanup")
-def cleanup_logs(_: str = Depends(current_admin)):
+def cleanup_logs(admin: str = Depends(current_admin)):
     deleted = database.cleanup_old_audit_logs()
     draft_manager.cleanup_abandoned_sessions(24)
+    database.add_audit_log(admin, "logs_cleaned_up", "audit_log", f"deleted: {deleted}")
     return {"ok": True, "deleted": deleted}
 
 

@@ -24,22 +24,31 @@ class TranscriptionWorker:
         self.policy = QueuePolicy(settings.default_model, settings.fallback_model, settings.queue_threshold)
         self.notifier = NotificationService(settings, database)
         self.stop_event = threading.Event()
-        self.thread = threading.Thread(target=self._run, name="transcription-worker", daemon=True)
+        self.wake_event = threading.Event()
+        self.thread: threading.Thread | None = None
 
     def start(self) -> None:
+        if self.thread and self.thread.is_alive():
+            return
+        self.stop_event.clear()
+        self.database.recover_processing_jobs()
+        self.thread = threading.Thread(target=self._run, name="transcription-worker", daemon=True)
         self.thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
-        self.thread.join(timeout=10)
+        self.wake_event.set()
+        if self.thread:
+            self.thread.join(timeout=10)
+            if self.thread.is_alive():
+                LOGGER.error("Transcription worker did not stop within 10 seconds")
 
     def wake(self) -> None:
-        # The worker polls briefly so a process restart cannot strand waiting jobs.
-        pass
+        self.wake_event.set()
 
     def _run(self) -> None:
         while not self.stop_event.is_set():
-            job = self.database.next_waiting()
+            job = self.database.claim_next_waiting()
             if job:
                 try:
                     self.process(job)
@@ -47,7 +56,8 @@ class TranscriptionWorker:
                     LOGGER.exception("Job %s failed", job["id"])
                     self.database.update_job(job["id"], status="failed", error=str(exc), completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"))
             else:
-                self.stop_event.wait(1)
+                self.wake_event.wait(1)
+                self.wake_event.clear()
 
     def process(self, job: dict) -> None:
         try:
@@ -183,4 +193,4 @@ class TranscriptionWorker:
                     )
         finally:
             stop_heartbeat.set()
-            heartbeat_thread.join(timeout=2)
+            heartbeat_thread.join()

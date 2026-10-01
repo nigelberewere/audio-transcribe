@@ -317,6 +317,23 @@ def test_merge_fewer_than_two_files_rejected(document_state):
     assert "at least 2" in error.value.detail.lower()
 
 
+def test_merge_rejects_path_traversal_output_filename(document_state):
+    pdf = make_pdf(text="Traversal")
+    doc1 = main.upload_document(upload("one.pdf", pdf, "application/pdf"), None, "", "member")
+    doc2 = main.upload_document(upload("two.pdf", pdf, "application/pdf"), None, "", "member")
+
+    with pytest.raises(HTTPException) as exc:
+        main.merge_documents_endpoint(
+            main.MergeDocumentsRequest(
+                document_ids=[doc1["id"], doc2["id"]],
+                output_filename="..\\outside.pdf",
+            ),
+            user="member",
+        )
+
+    assert exc.value.status_code == 400
+
+
 # --- PDF Tools: Split Tests ---
 
 def test_split_pdf_by_page_range(document_state):
@@ -373,7 +390,8 @@ def test_watermark_preserves_page_count_and_opens(document_state):
         audit = conn.execute("SELECT action, target, details FROM audit_log WHERE action = 'document_watermarked'").fetchone()
     assert audit[0] == "document_watermarked"
     assert audit[1] == watermarked_doc["id"]
-    assert "CONFIDENTIAL" in audit[2]
+    assert audit[2].endswith("text length: 12")
+    assert "CONFIDENTIAL" not in audit[2]
 
 
 # --- File Conversion Tests ---
