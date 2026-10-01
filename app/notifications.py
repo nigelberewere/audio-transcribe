@@ -51,9 +51,101 @@ class NotificationService:
         self.settings = settings
         self.database = database
 
+    def get_smtp_config(self, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Resolve SMTP settings: overrides -> database -> environment variables -> defaults."""
+        db_settings: dict[str, str] = {}
+        if self.database:
+            try:
+                db_settings = self.database.get_settings([
+                    "smtp_host", "smtp_port", "smtp_username", "smtp_password",
+                    "smtp_from_address", "smtp_use_tls"
+                ])
+            except Exception:
+                db_settings = {}
+
+        # 1. Host
+        host = ""
+        if overrides and overrides.get("smtp_host") is not None:
+            host = str(overrides["smtp_host"]).strip()
+        elif "smtp_host" in db_settings:
+            host = str(db_settings["smtp_host"]).strip()
+        elif getattr(self.settings, "smtp_host", None):
+            host = str(self.settings.smtp_host).strip()
+
+        # 2. Port
+        port = 587
+        if overrides and overrides.get("smtp_port") is not None:
+            try:
+                port = int(overrides["smtp_port"])
+            except (ValueError, TypeError):
+                port = 587
+        elif "smtp_port" in db_settings:
+            try:
+                port = int(db_settings["smtp_port"])
+            except (ValueError, TypeError):
+                port = 587
+        elif getattr(self.settings, "smtp_port", None):
+            try:
+                port = int(self.settings.smtp_port)
+            except (ValueError, TypeError):
+                port = 587
+
+        # 3. Username
+        username = ""
+        if overrides and overrides.get("smtp_username") is not None:
+            username = str(overrides["smtp_username"]).strip()
+        elif "smtp_username" in db_settings:
+            username = str(db_settings["smtp_username"]).strip()
+        elif getattr(self.settings, "smtp_username", None):
+            username = str(self.settings.smtp_username).strip()
+
+        # 4. Password (write-only / sensitive)
+        password = ""
+        if overrides and overrides.get("smtp_password"):
+            password = str(overrides["smtp_password"])
+        elif "smtp_password" in db_settings:
+            password = str(db_settings["smtp_password"])
+        elif getattr(self.settings, "smtp_password", None):
+            password = str(self.settings.smtp_password)
+
+        # 5. From Address
+        from_addr = ""
+        if overrides and overrides.get("smtp_from_address") is not None:
+            from_addr = str(overrides["smtp_from_address"]).strip()
+        elif "smtp_from_address" in db_settings:
+            from_addr = str(db_settings["smtp_from_address"]).strip()
+        elif getattr(self.settings, "smtp_from_address", None):
+            from_addr = str(self.settings.smtp_from_address).strip()
+        if not from_addr:
+            from_addr = username or "noreply@transcribe.local"
+
+        # 6. Use TLS
+        use_tls = True
+        if overrides and overrides.get("smtp_use_tls") is not None:
+            val = overrides["smtp_use_tls"]
+            use_tls = str(val).strip().lower() in ("true", "1", "yes", "on") if not isinstance(val, bool) else val
+        elif "smtp_use_tls" in db_settings:
+            val = db_settings["smtp_use_tls"]
+            use_tls = str(val).strip().lower() in ("true", "1", "yes", "on")
+        elif getattr(self.settings, "smtp_use_tls", None) is not None:
+            use_tls = bool(self.settings.smtp_use_tls)
+
+        timeout = getattr(self.settings, "smtp_timeout", 10.0)
+
+        return {
+            "smtp_host": host,
+            "smtp_port": port,
+            "smtp_username": username,
+            "smtp_password": password,
+            "smtp_from_address": from_addr,
+            "smtp_use_tls": use_tls,
+            "smtp_timeout": timeout,
+        }
+
     @property
     def is_enabled(self) -> bool:
-        return bool(self.settings.smtp_host and self.settings.smtp_host.strip())
+        cfg = self.get_smtp_config()
+        return bool(cfg["smtp_host"])
 
     def resolve_recipient_email(self, job: dict[str, Any]) -> str | None:
         """Resolve recipient email from job owner's user account."""
@@ -68,17 +160,21 @@ class NotificationService:
             return str(job["email"]).strip()
         return None
 
-    def send_notification(self, recipient_email: str, subject: str, text_body: str, target_id: str | None = None) -> bool:
+    def send_notification(
+        self,
+        recipient_email: str,
+        subject: str,
+        text_body: str,
+        target_id: str | None = None,
+        overrides: dict[str, Any] | None = None,
+    ) -> bool:
         """Send email via SMTP with timeout, error handling, and audit logging."""
-        if not self.is_enabled:
+        cfg = self.get_smtp_config(overrides)
+        if not cfg["smtp_host"]:
             return False
 
         masked = mask_email(recipient_email)
-        from_addr = (
-            getattr(self.settings, "smtp_from_address", "")
-            or getattr(self.settings, "smtp_username", "")
-            or "noreply@transcribe.local"
-        )
+        from_addr = cfg["smtp_from_address"] or "noreply@transcribe.local"
 
         msg = EmailMessage()
         msg["Subject"] = subject
@@ -87,19 +183,12 @@ class NotificationService:
         msg.set_content(text_body)
 
         try:
-            timeout = getattr(self.settings, "smtp_timeout", 10.0)
-            host = self.settings.smtp_host
-            port = getattr(self.settings, "smtp_port", 587)
-            use_tls = getattr(self.settings, "smtp_use_tls", True)
-
-            server = smtplib.SMTP(host=host, port=port, timeout=timeout)
+            server = smtplib.SMTP(host=cfg["smtp_host"], port=cfg["smtp_port"], timeout=cfg["smtp_timeout"])
             try:
-                if use_tls:
+                if cfg["smtp_use_tls"]:
                     server.starttls()
-                smtp_user = getattr(self.settings, "smtp_username", "")
-                smtp_pass = getattr(self.settings, "smtp_password", "")
-                if smtp_user and smtp_pass:
-                    server.login(smtp_user, smtp_pass)
+                if cfg["smtp_username"] and cfg["smtp_password"]:
+                    server.login(cfg["smtp_username"], cfg["smtp_password"])
                 server.send_message(msg)
             finally:
                 try:
@@ -117,6 +206,67 @@ class NotificationService:
             if self.database and target_id:
                 self.database.add_audit_log(actor="system", action="notification_failed", target=target_id, details=masked)
             return False
+
+    def send_test_email(
+        self,
+        recipient_email: str,
+        actor: str,
+        overrides: dict[str, Any] | None = None,
+    ) -> tuple[bool, str]:
+        """Send an immediate test email, independent of any job, logging test_notification_sent/failed to audit_log."""
+        if not recipient_email or "@" not in recipient_email:
+            if self.database:
+                self.database.add_audit_log(actor=actor, action="test_notification_failed", target="invalid_email", details="Invalid recipient email address")
+            return False, "Invalid recipient email address"
+
+        cfg = self.get_smtp_config(overrides)
+        if not cfg["smtp_host"]:
+            masked = mask_email(recipient_email)
+            if self.database:
+                self.database.add_audit_log(actor=actor, action="test_notification_failed", target=masked, details="SMTP host is not configured")
+            return False, "SMTP host is not configured"
+
+        masked = mask_email(recipient_email)
+        from_addr = cfg["smtp_from_address"] or "noreply@transcribe.local"
+
+        msg = EmailMessage()
+        msg["Subject"] = "Test Email: Zingsa Files Center Notification"
+        msg["From"] = from_addr
+        msg["To"] = recipient_email
+        msg.set_content(
+            "Hello,\n\n"
+            "This is a test notification from Zingsa Files Center.\n\n"
+            f"Sent at: {format_timestamp()}\n"
+            f"SMTP Host: {cfg['smtp_host']}:{cfg['smtp_port']}\n"
+            f"TLS: {'Enabled' if cfg['smtp_use_tls'] else 'Disabled'}\n\n"
+            "If you received this message, your notification settings are functioning correctly."
+        )
+
+        try:
+            server = smtplib.SMTP(host=cfg["smtp_host"], port=cfg["smtp_port"], timeout=cfg["smtp_timeout"])
+            try:
+                if cfg["smtp_use_tls"]:
+                    server.starttls()
+                if cfg["smtp_username"] and cfg["smtp_password"]:
+                    server.login(cfg["smtp_username"], cfg["smtp_password"])
+                server.send_message(msg)
+            finally:
+                try:
+                    server.quit()
+                except Exception:
+                    pass
+
+            LOGGER.info("Test notification email sent to %s by actor %s", masked, actor)
+            if self.database:
+                self.database.add_audit_log(actor=actor, action="test_notification_sent", target=masked, details=f"Host: {cfg['smtp_host']}")
+            return True, f"Test email sent successfully to {recipient_email}."
+
+        except Exception as exc:
+            err_msg = str(exc)
+            LOGGER.warning("Test notification email to %s failed: %s", masked, err_msg)
+            if self.database:
+                self.database.add_audit_log(actor=actor, action="test_notification_failed", target=masked, details=f"Error: {categorize_error(err_msg)}")
+            return False, f"SMTP Error: {err_msg}"
 
     def notify_job_completion(
         self, job: dict[str, Any], status: str, error: Any = None, job_type: str = "transcription"
@@ -167,3 +317,4 @@ class NotificationService:
 
         body = "\n".join(lines)
         return self.send_notification(recipient_email, subject, body, target_id=job_id)
+

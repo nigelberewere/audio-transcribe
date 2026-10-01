@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +91,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
     content,
     tokenize = 'porter unicode61'
 );
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -175,7 +180,33 @@ class Database:
                 (actor, action, target, details, now()),
             )
 
+    def get_log_retention_days(self) -> int:
+        settings = self.get_settings(["audit_log_retention_days"])
+        val = settings.get("audit_log_retention_days")
+        if val in {"1", "3", "7"}:
+            return int(val)
+        return 1
+
+    def set_log_retention_days(self, days: int) -> None:
+        if days not in {1, 3, 7}:
+            raise ValueError("Retention days must be 1, 3, or 7")
+        self.set_setting("audit_log_retention_days", str(days))
+
+    def cleanup_old_audit_logs(self, retention_days: int | None = None) -> int:
+        if retention_days is None:
+            retention_days = self.get_log_retention_days()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+        with self.connect() as connection:
+            cursor = connection.execute("DELETE FROM audit_log WHERE created_at < ?", (cutoff,))
+            return cursor.rowcount
+
+    def count_audit_logs(self) -> int:
+        with self.connect() as connection:
+            row = connection.execute("SELECT COUNT(*) FROM audit_log").fetchone()
+            return int(row[0]) if row else 0
+
     def list_audit_log(self, actor: str | None = None, action: str | None = None, limit: int = 50, offset: int = 0, target: str | None = None) -> tuple[list[dict[str, Any]], bool, list[str], list[str]]:
+        self.cleanup_old_audit_logs()
         filters = []
         values: list[Any] = []
         if actor:
@@ -189,7 +220,7 @@ class Database:
             values.append(target)
         where = f" WHERE {' AND '.join(filters)}" if filters else ""
         page_size = max(1, min(limit, 100))
-        query = f"SELECT * FROM audit_log{where} ORDER BY id LIMIT ? OFFSET ?"
+        query = f"SELECT * FROM audit_log{where} ORDER BY id DESC LIMIT ? OFFSET ?"
         with self.connect() as connection:
             rows = connection.execute(query, [*values, page_size + 1, max(0, offset)]).fetchall()
             actors = [row[0] for row in connection.execute("SELECT DISTINCT actor FROM audit_log ORDER BY actor")]
@@ -367,9 +398,15 @@ class Database:
             result["source_document_ids"] = None
         return result
 
-    def list_jobs(self) -> list[dict[str, Any]]:
+    def list_jobs(self, username: str | None = None) -> list[dict[str, Any]]:
         with self.connect() as connection:
-            rows = connection.execute("SELECT * FROM jobs ORDER BY created_at DESC").fetchall()
+            if username is not None:
+                rows = connection.execute(
+                    "SELECT * FROM jobs WHERE created_by = ? ORDER BY created_at DESC",
+                    (username,),
+                ).fetchall()
+            else:
+                rows = connection.execute("SELECT * FROM jobs ORDER BY created_at DESC").fetchall()
         return [self._decode(row) for row in rows]
 
     def update_job(self, job_id: str, **fields: Any) -> None:
@@ -406,7 +443,7 @@ class Database:
         with self.connect() as connection:
             connection.execute("DELETE FROM search_index WHERE item_type = ? AND item_id = ?", (item_type, item_id))
 
-    def search(self, query: str) -> dict[str, list[dict[str, Any]]]:
+    def search(self, query: str, username: str | None = None) -> dict[str, list[dict[str, Any]]]:
         import re
         tokens = re.findall(r"\w+", query)
         if not tokens:
@@ -437,6 +474,8 @@ class Database:
             if item_type == "transcript":
                 job = self.get_job(item_id)
                 if job is not None and job.get("status") != "done":
+                    continue
+                if username is not None and job and job.get("created_by") and job["created_by"] != username:
                     continue
                 transcripts.append({
                     "id": item_id,
@@ -474,6 +513,40 @@ class Database:
         with self.connect() as connection:
             row = connection.execute("SELECT * FROM jobs WHERE status = 'waiting' ORDER BY created_at LIMIT 1").fetchone()
         return self._decode(row) if row else None
+
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        with self.connect() as connection:
+            row = connection.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else default
+
+    def get_settings(self, keys: list[str] | None = None) -> dict[str, str]:
+        with self.connect() as connection:
+            if keys:
+                placeholders = ",".join("?" for _ in keys)
+                rows = connection.execute(f"SELECT key, value FROM app_settings WHERE key IN ({placeholders})", keys).fetchall()
+            else:
+                rows = connection.execute("SELECT key, value FROM app_settings").fetchall()
+        return {row[0]: row[1] for row in rows}
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                (key, str(value), now()),
+            )
+
+    def set_settings(self, settings_dict: dict[str, str]) -> None:
+        timestamp = now()
+        with self.connect() as connection:
+            for key, value in settings_dict.items():
+                connection.execute(
+                    "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    (key, str(value), timestamp),
+                )
+
+    def delete_setting(self, key: str) -> None:
+        with self.connect() as connection:
+            connection.execute("DELETE FROM app_settings WHERE key = ?", (key,))
 
     @staticmethod
     def _decode(row: sqlite3.Row) -> dict[str, Any]:

@@ -21,7 +21,12 @@ function escapeHtml(value) {
     '"': '&quot;',
     "'": '&#39;'
   }[char]));
+}// Remove any legacy navigation links and sidebar badges
+function cleanupBrandNavLinks() {
+  document.querySelectorAll('header.brand-card nav a, .brand-card nav a, .sidebar-item .status-badge').forEach(el => el.remove());
 }
+if (document.readyState !== 'loading') cleanupBrandNavLinks();
+else document.addEventListener('DOMContentLoaded', cleanupBrandNavLinks);
 
 function formatDateTime(value) {
   const date = new Date(value);
@@ -35,6 +40,7 @@ function formatDateTime(value) {
 }
 
 function populateOptions(select, values, emptyLabel) {
+  if (!select) return;
   const current = select.value;
   select.innerHTML = `<option value="">${emptyLabel}</option>` + values.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join('');
   select.value = values.includes(current) ? current : '';
@@ -45,7 +51,9 @@ function toggleAuditFilters() {
 }
 
 function renderAudit(entries) {
-  $('auditLog').innerHTML += entries.map(entry => `<tr>
+  const logEl = $('auditLog');
+  if (!logEl) return;
+  logEl.innerHTML += entries.map(entry => `<tr>
     <td>${formatDateTime(entry.created_at)}</td>
     <td>${escapeHtml(entry.actor)}</td>
     <td><code>${escapeHtml(entry.action)}</code></td>
@@ -55,6 +63,7 @@ function renderAudit(entries) {
 }
 
 async function loadAudit(reset = true) {
+  if (!$('auditLog')) return;
   if (reset) {
     auditState.offset = 0;
     $('auditLog').innerHTML = '';
@@ -91,16 +100,19 @@ async function loadAdmin() {
     }
   }
 
-  $('stats').innerHTML = [
+  if ($('stats')) {
+    $('stats').innerHTML = [
     ['Total users', overview.total_users],
     ['Active jobs', overview.active_jobs],
     ['Completed today', overview.completed_jobs_today],
     ['Documents', overview.total_documents],
     ['Storage used', formatBytes(overview.total_storage_used)],
     ['Documents today', overview.documents_uploaded_today]
-  ].map(([label, value]) => `<article class="stat"><strong>${value}</strong><span>${label}</span></article>`).join('');
+    ].map(([label, value]) => `<article class="stat"><strong>${value}</strong><span>${label}</span></article>`).join('');
+  }
 
-  $('users').innerHTML = users.map(user => {
+  if ($('users')) {
+    $('users').innerHTML = users.map(user => {
     const fullName = [user.first_name, user.surname].filter(Boolean).join(' ') || '—';
     const email = user.email || '—';
     return `<tr>
@@ -108,14 +120,63 @@ async function loadAdmin() {
       <td><code>${escapeHtml(user.username)}</code></td>
       <td>${escapeHtml(email)}</td>
       <td><span class="role-badge ${user.role === 'admin' ? 'admin' : ''}">${user.role === 'admin' ? 'Admin' : 'User'}</span></td>
-      <td><span class="status-badge ${user.active ? 'active' : 'inactive'}">${user.active ? 'Active' : 'Inactive'}</span></td>
+      <td>
+        <button type="button" class="status-toggle-btn" onclick="toggleUserStatus('${encodeURIComponent(user.username)}', ${user.active ? 0 : 1})" title="Click to ${user.active ? 'deactivate' : 'activate'} this user">
+          <span class="status-badge ${user.active ? 'active' : 'inactive'}">${user.active ? 'Active' : 'Inactive'}</span>
+        </button>
+      </td>
       <td>${formatDateTime(user.created_at)}</td>
       <td>${escapeHtml(user.created_by || 'Bootstrap')}</td>
       <td><button class="quiet manage-button" onclick="openManageUser('${encodeURIComponent(user.username)}')">Manage account</button></td>
     </tr>`;
-  }).join('');
+    }).join('');
+  }
 
-  await Promise.all([loadAudit(), loadAdminSettings()]);
+  await Promise.all([loadAudit(), syncSidebarBadges()]);
+}
+
+async function loadAdminUser() {
+  try {
+    const me = await request('/api/me');
+    if (me) {
+      currentAdminUser = me.username;
+      if ($('userName')) {
+        $('userName').textContent = me.name || me.username;
+        $('userName').title = `${me.username}${me.email ? ' · ' + me.email : ''}`;
+      }
+    }
+  } catch (err) {
+    if (window.location.pathname !== '/admin/login' && !$('adminLoginForm')) {
+      window.location.href = '/admin/login';
+    }
+  }
+}
+
+async function syncSidebarBadges() {
+  if (!$('sidebarHfBadge') && !$('sidebarSmtpBadge') && !$('sidebarLogsBadge')) return;
+  try {
+    const [hfSettings, smtpSettings, logsSettings] = await Promise.all([
+      request('/api/admin/settings').catch(() => null),
+      request('/api/admin/notifications/settings').catch(() => null),
+      request('/api/admin/logs/settings').catch(() => null)
+    ]);
+    if (hfSettings && $('sidebarHfBadge')) {
+      const active = hfSettings.has_token;
+      $('sidebarHfBadge').textContent = active ? (hfSettings.available ? 'Ready' : 'Configured') : 'Not set';
+      $('sidebarHfBadge').className = `status-badge ${active ? 'active' : 'inactive'}`;
+    }
+    if (smtpSettings && $('sidebarSmtpBadge')) {
+      const active = smtpSettings.is_enabled;
+      $('sidebarSmtpBadge').textContent = active ? 'Enabled' : 'Disabled';
+      $('sidebarSmtpBadge').className = `status-badge ${active ? 'active' : 'inactive'}`;
+    }
+    if (logsSettings && $('sidebarLogsBadge')) {
+      $('sidebarLogsBadge').textContent = `${logsSettings.retention_days}d retention`;
+      $('sidebarLogsBadge').className = 'status-badge active';
+    }
+  } catch (e) {
+    // Ignore badge sync errors
+  }
 }
 
 function openManageUser(encodedUsername) {
@@ -134,6 +195,7 @@ function openManageUser(encodedUsername) {
   $('manageRole').value = user.role || 'user';
   $('manageActive').checked = !!user.active;
   $('manageActiveLabel').textContent = user.active ? 'Active' : 'Inactive';
+  $('manageActiveLabel').className = `status-badge ${user.active ? 'active' : 'inactive'}`;
 
   $('manageNewPassword').value = '';
   $('manageConfirmPassword').value = '';
@@ -161,37 +223,92 @@ function openResetPassword(username) {
   openManageUser(encodeURIComponent(username));
 }
 
-$('manageActive')?.addEventListener('change', function () {
-  $('manageActiveLabel').textContent = this.checked ? 'Active' : 'Inactive';
-});
-
-$('manageDetailsForm')?.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  if (!currentManageUser) return;
+async function saveManageDetails(showFeedback = true) {
+  if (!currentManageUser) return false;
   const msgEl = $('manageDetailsMessage');
-  msgEl.textContent = '';
-  msgEl.className = 'feedback-msg';
+  if (msgEl && showFeedback) {
+    msgEl.textContent = '';
+    msgEl.className = 'feedback-msg';
+  }
 
   const body = new URLSearchParams();
-  body.set('first_name', $('manageFirstName').value.trim());
-  body.set('surname', $('manageSurname').value.trim());
-  body.set('email', $('manageEmail').value.trim());
-  body.set('role', $('manageRole').value);
-  body.set('active', $('manageActive').checked ? '1' : '0');
+  body.set('first_name', $('manageFirstName')?.value.trim() || currentManageUser.first_name || '');
+  body.set('surname', $('manageSurname')?.value.trim() || currentManageUser.surname || '');
+  body.set('email', $('manageEmail')?.value.trim() || currentManageUser.email || '');
+  body.set('role', $('manageRole')?.value || currentManageUser.role || 'user');
+  body.set('active', $('manageActive')?.checked ? '1' : '0');
 
   try {
     await request(`/api/admin/users/${encodeURIComponent(currentManageUser.username)}`, {
       method: 'PATCH',
       body
     });
-    msgEl.textContent = 'Account profile and status updated successfully!';
-    msgEl.className = 'feedback-msg success';
+    if (msgEl && showFeedback) {
+      msgEl.textContent = 'Account profile and status updated successfully!';
+      msgEl.className = 'feedback-msg success';
+    }
+    await loadAdmin();
+    currentManageUser = loadedUsers.find(u => u.username === currentManageUser.username) || currentManageUser;
+    return true;
+  } catch (error) {
+    if (msgEl) {
+      msgEl.textContent = error.message;
+      msgEl.className = 'feedback-msg error';
+    }
+    return false;
+  }
+}
+
+$('manageActive')?.addEventListener('change', async function () {
+  if (!currentManageUser) return;
+  const isChecked = this.checked;
+  const labelEl = $('manageActiveLabel');
+  if (labelEl) {
+    labelEl.textContent = isChecked ? 'Active' : 'Inactive';
+    labelEl.className = `status-badge ${isChecked ? 'active' : 'inactive'}`;
+  }
+
+  const msgEl = $('manageDetailsMessage');
+  if (msgEl) {
+    msgEl.textContent = isChecked ? 'Activating account...' : 'Deactivating account...';
+    msgEl.className = 'feedback-msg';
+  }
+
+  const body = new URLSearchParams();
+  body.set('active', isChecked ? '1' : '0');
+  body.set('first_name', $('manageFirstName')?.value.trim() || currentManageUser.first_name || '');
+  body.set('surname', $('manageSurname')?.value.trim() || currentManageUser.surname || '');
+  body.set('email', $('manageEmail')?.value.trim() || currentManageUser.email || '');
+  body.set('role', $('manageRole')?.value || currentManageUser.role || 'user');
+
+  try {
+    await request(`/api/admin/users/${encodeURIComponent(currentManageUser.username)}`, {
+      method: 'PATCH',
+      body
+    });
+    currentManageUser.active = isChecked ? 1 : 0;
+    if (msgEl) {
+      msgEl.textContent = `Account status updated to ${isChecked ? 'Active' : 'Inactive'}!`;
+      msgEl.className = 'feedback-msg success';
+    }
     await loadAdmin();
     currentManageUser = loadedUsers.find(u => u.username === currentManageUser.username) || currentManageUser;
   } catch (error) {
-    msgEl.textContent = error.message;
-    msgEl.className = 'feedback-msg error';
+    this.checked = !isChecked;
+    if (labelEl) {
+      labelEl.textContent = this.checked ? 'Active' : 'Inactive';
+      labelEl.className = `status-badge ${this.checked ? 'active' : 'inactive'}`;
+    }
+    if (msgEl) {
+      msgEl.textContent = error.message;
+      msgEl.className = 'feedback-msg error';
+    }
   }
+});
+
+$('manageDetailsForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  await saveManageDetails(true);
 });
 
 $('managePasswordForm')?.addEventListener('submit', async (event) => {
@@ -257,10 +374,43 @@ $('deleteUserBtn')?.addEventListener('click', async () => {
   }
 });
 
-$('closeManageUser')?.addEventListener('click', () => {
-  $('manageUserDialog').close();
+$('closeManageUser')?.addEventListener('click', async () => {
+  if (currentManageUser && $('manageUserDialog')?.open) {
+    await saveManageDetails(false);
+  }
+  $('manageUserDialog')?.close();
   currentManageUser = null;
+  await loadAdmin();
 });
+
+async function toggleUserStatus(encodedUsername, newStatus) {
+  const username = decodeURIComponent(encodedUsername);
+  const user = loadedUsers.find(u => u.username === username);
+  if (!user) return;
+
+  if (username === currentAdminUser && newStatus === 0) {
+    const ok = window.confirm('Warning: You are about to deactivate your own administrator account. Proceed?');
+    if (!ok) return;
+  }
+
+  const body = new URLSearchParams();
+  body.set('active', String(newStatus));
+  body.set('first_name', user.first_name || '');
+  body.set('surname', user.surname || '');
+  body.set('email', user.email || '');
+  body.set('role', user.role || 'user');
+
+  try {
+    await request(`/api/admin/users/${encodeURIComponent(username)}`, {
+      method: 'PATCH',
+      body
+    });
+    await loadAdmin();
+  } catch (error) {
+    alert(error.message || 'Failed to update user status');
+  }
+}
+window.toggleUserStatus = toggleUserStatus;
 
 $('adminLoginForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -339,10 +489,20 @@ async function loadAdminSettings() {
       }
       if (clearBtn) clearBtn.hidden = true;
     }
+    const sidebarBadge = $('sidebarHfBadge') || $('hfBadgeMenu') || $('hfBadgeNav');
+    if (sidebarBadge) {
+      sidebarBadge.textContent = settings.has_token ? (settings.available ? 'Ready' : 'Configured') : 'Not set';
+      sidebarBadge.className = `status-badge ${settings.has_token ? 'active' : 'inactive'}`;
+    }
   } catch (error) {
     if ($('hfBadge')) {
       $('hfBadge').textContent = 'Error';
       $('hfBadge').className = 'status-badge inactive';
+    }
+    const sidebarBadge = $('sidebarHfBadge') || $('hfBadgeMenu') || $('hfBadgeNav');
+    if (sidebarBadge) {
+      sidebarBadge.textContent = 'Error';
+      sidebarBadge.className = 'status-badge inactive';
     }
     if ($('hfCurrentStatus')) {
       $('hfCurrentStatus').textContent = `Failed to load settings: ${error.message}`;
@@ -425,9 +585,291 @@ $('clearHfTokenBtn')?.addEventListener('click', async () => {
   }
 });
 
+async function loadNotificationSettings() {
+  if (!$('notificationSettingsForm')) return;
+  try {
+    const settings = await request('/api/admin/notifications/settings');
+    const badge = $('smtpBadge');
+
+    if ($('smtpHost')) $('smtpHost').value = settings.smtp_host || '';
+    if ($('smtpPort')) $('smtpPort').value = settings.smtp_port || 587;
+    if ($('smtpUsername')) $('smtpUsername').value = settings.smtp_username || '';
+    if ($('smtpFromAddress')) $('smtpFromAddress').value = settings.smtp_from_address || '';
+    if ($('smtpUseTls')) {
+      $('smtpUseTls').checked = settings.smtp_use_tls !== false;
+      if ($('smtpUseTlsLabel')) {
+        $('smtpUseTlsLabel').textContent = $('smtpUseTls').checked ? 'Use TLS (STARTTLS)' : 'Plaintext (No TLS)';
+      }
+    }
+
+    if ($('smtpPassword')) {
+      $('smtpPassword').value = '';
+      $('smtpPassword').placeholder = settings.has_password ? '•••••••• (unchanged)' : 'Enter password';
+    }
+
+    if (badge) {
+      if (settings.is_enabled) {
+        badge.textContent = 'Enabled';
+        badge.className = 'status-badge active';
+      } else {
+        badge.textContent = 'Disabled';
+        badge.className = 'status-badge inactive';
+      }
+    }
+    const sidebarBadge = $('sidebarSmtpBadge') || $('smtpBadgeMenu') || $('smtpBadgeNav');
+    if (sidebarBadge && badge) {
+      sidebarBadge.textContent = badge.textContent;
+      sidebarBadge.className = badge.className;
+    }
+  } catch (error) {
+    if ($('smtpBadge')) {
+      $('smtpBadge').textContent = 'Error';
+      $('smtpBadge').className = 'status-badge inactive';
+    }
+    const sidebarBadge = $('sidebarSmtpBadge') || $('smtpBadgeMenu') || $('smtpBadgeNav');
+    if (sidebarBadge) {
+      sidebarBadge.textContent = 'Error';
+      sidebarBadge.className = 'status-badge inactive';
+    }
+    const feedback = $('notificationFeedback');
+    if (feedback) {
+      feedback.textContent = `Failed to load notification settings: ${error.message}`;
+      feedback.className = 'feedback-msg error';
+    }
+  }
+}
+
+$('smtpUseTls')?.addEventListener('change', function () {
+  if ($('smtpUseTlsLabel')) {
+    $('smtpUseTlsLabel').textContent = this.checked ? 'Use TLS (STARTTLS)' : 'Plaintext (No TLS)';
+  }
+});
+
+$('notificationSettingsForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const feedback = $('notificationFeedback');
+  const saveBtn = $('saveSmtpBtn');
+
+  saveBtn.disabled = true;
+  if (feedback) {
+    feedback.textContent = 'Saving notification settings...';
+    feedback.className = 'feedback-msg';
+  }
+
+  const payload = {
+    smtp_host: $('smtpHost').value.trim(),
+    smtp_port: parseInt($('smtpPort').value, 10) || 587,
+    smtp_username: $('smtpUsername').value.trim(),
+    smtp_password: $('smtpPassword').value,
+    smtp_from_address: $('smtpFromAddress').value.trim(),
+    smtp_use_tls: $('smtpUseTls').checked
+  };
+
+  try {
+    const res = await request('/api/admin/notifications/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (feedback) {
+      feedback.textContent = res.message || 'Notification settings saved successfully!';
+      feedback.className = 'feedback-msg success';
+    }
+    await loadNotificationSettings();
+    await loadAudit();
+  } catch (error) {
+    if (feedback) {
+      feedback.textContent = error.message;
+      feedback.className = 'feedback-msg error';
+    }
+  } finally {
+    saveBtn.disabled = false;
+  }
+});
+
+$('sendTestEmailBtn')?.addEventListener('click', async () => {
+  const feedback = $('testEmailFeedback');
+  const testBtn = $('sendTestEmailBtn');
+  const recipient = $('testRecipientEmail')?.value.trim();
+
+  if (!recipient) {
+    if (feedback) {
+      feedback.textContent = 'Please enter a recipient email address.';
+      feedback.className = 'feedback-msg error';
+    }
+    return;
+  }
+
+  testBtn.disabled = true;
+  if (feedback) {
+    feedback.textContent = 'Sending test email...';
+    feedback.className = 'feedback-msg';
+  }
+
+  const payload = {
+    recipient_email: recipient,
+    smtp_host: $('smtpHost')?.value.trim() || undefined,
+    smtp_port: parseInt($('smtpPort')?.value, 10) || undefined,
+    smtp_username: $('smtpUsername')?.value.trim() || undefined,
+    smtp_password: $('smtpPassword')?.value || undefined,
+    smtp_from_address: $('smtpFromAddress')?.value.trim() || undefined,
+    smtp_use_tls: $('smtpUseTls')?.checked
+  };
+
+  try {
+    const res = await request('/api/admin/notifications/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (feedback) {
+      feedback.textContent = res.message || 'Test email sent successfully!';
+      feedback.className = 'feedback-msg success';
+    }
+    await loadAudit();
+  } catch (error) {
+    if (feedback) {
+      feedback.textContent = error.message;
+      feedback.className = 'feedback-msg error';
+    }
+    await loadAudit();
+  } finally {
+    testBtn.disabled = false;
+  }
+});
+
 $('logout')?.addEventListener('click', async () => {
   await fetch('/api/logout', {method: 'POST'});
   location.href = '/admin/login';
 });
 
-if ($('users')) loadAdmin().catch(() => { location.href = '/'; });
+/* ==========================================================================
+   Logs Settings & Retention Controller
+   ========================================================================== */
+
+async function loadLogsSettings() {
+  if (!$('logRetentionForm')) return;
+  try {
+    const data = await request('/api/admin/logs/settings');
+    const days = String(data.retention_days || 1);
+    const radio = document.querySelector(`input[name="retention_days"][value="${days}"]`);
+    if (radio) radio.checked = true;
+
+    if ($('retentionBadge')) {
+      $('retentionBadge').textContent = `${days} Day${days === '1' ? '' : 's'} Retention`;
+      $('retentionBadge').className = 'status-badge active';
+    }
+  } catch (err) {
+    console.error('Failed to load log retention settings:', err);
+  }
+}
+
+$('logRetentionForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const feedback = $('logRetentionFeedback');
+  const saveBtn = $('saveRetentionBtn');
+  const selectedRadio = document.querySelector('input[name="retention_days"]:checked');
+  if (!selectedRadio) return;
+
+  const retentionDays = parseInt(selectedRadio.value, 10);
+  if (saveBtn) saveBtn.disabled = true;
+  if (feedback) {
+    feedback.textContent = 'Updating retention policy...';
+    feedback.className = 'feedback-msg';
+  }
+
+  try {
+    const res = await request('/api/admin/logs/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ retention_days: retentionDays })
+    });
+    if (feedback) {
+      feedback.textContent = `Retention policy updated to ${retentionDays} day${retentionDays === 1 ? '' : 's'}. Pruned ${res.pruned || 0} expired logs.`;
+      feedback.className = 'feedback-msg success';
+    }
+    if ($('retentionBadge')) {
+      $('retentionBadge').textContent = `${retentionDays} Day${retentionDays === 1 ? '' : 's'} Retention`;
+    }
+    await Promise.all([loadAudit(true), syncSidebarBadges()]);
+  } catch (error) {
+    if (feedback) {
+      feedback.textContent = error.message;
+      feedback.className = 'feedback-msg error';
+    }
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
+});
+
+$('purgeExpiredLogsBtn')?.addEventListener('click', async () => {
+  const feedback = $('logRetentionFeedback');
+  const purgeBtn = $('purgeExpiredLogsBtn');
+  if (purgeBtn) purgeBtn.disabled = true;
+  if (feedback) {
+    feedback.textContent = 'Purging expired logs...';
+    feedback.className = 'feedback-msg';
+  }
+  try {
+    const res = await request('/api/admin/logs/cleanup', { method: 'POST' });
+    if (feedback) {
+      feedback.textContent = `Successfully purged ${res.deleted || 0} expired log record${res.deleted === 1 ? '' : 's'}.`;
+      feedback.className = 'feedback-msg success';
+    }
+    await loadAudit(true);
+  } catch (error) {
+    if (feedback) {
+      feedback.textContent = error.message;
+      feedback.className = 'feedback-msg error';
+    }
+  } finally {
+    if (purgeBtn) purgeBtn.disabled = false;
+  }
+});
+
+$('refreshAuditBtn')?.addEventListener('click', () => {
+  loadAudit(true);
+});
+
+$('resetAuditFiltersBtn')?.addEventListener('click', () => {
+  if ($('auditActor')) $('auditActor').value = '';
+  if ($('auditAction')) $('auditAction').value = '';
+  auditState.actor = '';
+  auditState.action = '';
+  loadAudit(true);
+});
+
+// Page initialization
+async function initPage() {
+  if ($('adminLoginForm')) {
+    // Agent / Admin login page - no dashboard loading
+    return;
+  }
+
+  if ($('users')) {
+    // Main admin overview page
+    try {
+      await loadAdmin();
+    } catch {
+      location.href = '/admin/login';
+    }
+  } else if ($('settingsForm') || $('notificationSettingsForm') || $('logRetentionForm') || $('auditLog')) {
+    // Dedicated settings pages
+    await loadAdminUser();
+    if ($('settingsForm')) {
+      await loadAdminSettings();
+    }
+    if ($('notificationSettingsForm')) {
+      await loadNotificationSettings();
+    }
+    if ($('logRetentionForm') || $('auditLog')) {
+      await loadLogsSettings();
+      await loadAudit(true);
+    }
+    await syncSidebarBadges();
+  }
+}
+
+initPage();
+
+

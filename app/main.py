@@ -9,7 +9,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -17,6 +17,8 @@ from pydantic import BaseModel
 from .audio import SUPPORTED_EXTENSIONS, check_ffmpeg
 from .config import Settings
 from .db import Database, now
+from .notifications import NotificationService
+from .recordings import RecordingDraftManager
 from .security import hash_password, verify_password
 from .worker import TranscriptionWorker
 from . import pdf_tools
@@ -27,13 +29,16 @@ handler = RotatingFileHandler(log_dir / "transcribe.log", maxBytes=10_000_000, b
 logging.basicConfig(level=logging.INFO, handlers=[handler, logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 database = Database(settings.db_path)
+notification_service = NotificationService(settings, database)
 worker = TranscriptionWorker(settings, database)
+draft_manager = RecordingDraftManager(settings.recording_draft_dir)
 sessions: dict[str, dict[str, str]] = {}
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     check_ffmpeg(settings.ffmpeg_path)
+    draft_manager.cleanup_abandoned_sessions(24)
     if database.count_users() == 0 and settings.admin_user and settings.admin_password:
         database.create_user(settings.admin_user, hash_password(settings.admin_password), "admin", None)
         logger.info("Bootstrap admin account created for %s.", settings.admin_user)
@@ -44,6 +49,17 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Zingsa Files Center", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+
+
+@app.middleware("http")
+async def no_cache_html_middleware(request: Request, call_next):
+    response = await call_next(request)
+    content_type = response.headers.get("content-type", "")
+    if "text/html" in content_type:
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 def current_user(session: str | None = Cookie(default=None)) -> str:
@@ -108,6 +124,45 @@ def admin_page(session: str | None = Cookie(default=None)) -> Response:
     except HTTPException:
         return RedirectResponse("/", status_code=303)
     return FileResponse(Path(__file__).parent / "static" / "admin.html")
+
+
+@app.get("/admin/settings", response_class=HTMLResponse)
+def settings_redirect_page(session: str | None = Cookie(default=None)) -> Response:
+    try:
+        current_admin(current_user(session))
+    except HTTPException:
+        return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/admin/settings/diarization", status_code=303)
+
+
+@app.get("/admin/settings/diarization", response_class=HTMLResponse)
+@app.get("/admin/diarization", response_class=HTMLResponse)
+def diarization_settings_page(session: str | None = Cookie(default=None)) -> Response:
+    try:
+        current_admin(current_user(session))
+    except HTTPException:
+        return RedirectResponse("/", status_code=303)
+    return FileResponse(Path(__file__).parent / "static" / "settings-diarization.html")
+
+
+@app.get("/admin/settings/notifications", response_class=HTMLResponse)
+@app.get("/admin/notifications", response_class=HTMLResponse)
+def notification_settings_page(session: str | None = Cookie(default=None)) -> Response:
+    try:
+        current_admin(current_user(session))
+    except HTTPException:
+        return RedirectResponse("/", status_code=303)
+    return FileResponse(Path(__file__).parent / "static" / "settings-notifications.html")
+
+
+@app.get("/admin/settings/logs", response_class=HTMLResponse)
+@app.get("/admin/logs", response_class=HTMLResponse)
+def logs_settings_page(session: str | None = Cookie(default=None)) -> Response:
+    try:
+        current_admin(current_user(session))
+    except HTTPException:
+        return RedirectResponse("/", status_code=303)
+    return FileResponse(Path(__file__).parent / "static" / "settings-logs.html")
 
 
 @app.post("/api/login")
@@ -188,13 +243,21 @@ def logout(session: str | None = Cookie(default=None), user: str = Depends(curre
 
 
 @app.get("/api/jobs")
-def jobs(user: str = Depends(current_user)):
-    results = database.list_jobs()
-    waiting_jobs = sorted(
-        [item for item in results if item["status"] == "waiting"],
+def jobs(all_jobs: bool = False, user: str = Depends(current_user)):
+    account = database.get_user(user)
+    is_admin = bool(account and account.get("role") == "admin")
+
+    all_waiting = sorted(
+        [item for item in database.list_jobs() if item["status"] == "waiting"],
         key=lambda item: item["created_at"],
     )
-    waiting_positions = {item["id"]: idx + 1 for idx, item in enumerate(waiting_jobs)}
+    waiting_positions = {item["id"]: idx + 1 for idx, item in enumerate(all_waiting)}
+
+    if all_jobs and is_admin:
+        results = database.list_jobs()
+    else:
+        results = database.list_jobs(username=user)
+
     for item in results:
         item["queue_position"] = waiting_positions.get(item["id"])
     return results
@@ -243,7 +306,9 @@ def search(q: str = "", user: str = Depends(current_user)):
     if not query:
         return {"transcripts": [], "documents": []}
     database.add_audit_log(user, "search_performed", None, query)
-    return database.search(query)
+    account = database.get_user(user)
+    is_admin = bool(account and account.get("role") == "admin")
+    return database.search(query, username=None if is_admin else user)
 
 
 @app.get("/api/documents")
@@ -702,17 +767,127 @@ def upload(file: UploadFile = File(...), model: str = Form("auto"), language: st
         "formats": [item.strip() for item in formats.split(",") if item.strip()],
         "created_by": user,
     })
+    database.add_audit_log(user, "job_created", job_id, f"filename: {file.filename}")
     return database.get_job(job_id)
+
+
+@app.post("/api/recordings/{session_id}/chunks")
+def upload_recording_chunk(
+    session_id: str,
+    chunk_index: int = Form(...),
+    chunk: UploadFile = File(...),
+    user: str = Depends(current_user),
+):
+    try:
+        content = chunk.file.read()
+        result = draft_manager.save_chunk(session_id, chunk_index, content, user)
+        return {"ok": True, **result}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@app.post("/api/recordings/{session_id}/finalize")
+def finalize_recording(
+    session_id: str,
+    filename: str = Form("meeting_recording.webm"),
+    model: str = Form("auto"),
+    language: str = Form("auto"),
+    initial_prompt: str = Form(""),
+    diarization: bool = Form(False),
+    hf_token: str = Form(""),
+    formats: str = Form("txt,txt_timestamps,srt,vtt,docx,json"),
+    user: str = Depends(current_user),
+):
+    model = model if isinstance(model, str) else "auto"
+    language = language if isinstance(language, str) else "auto"
+    initial_prompt = initial_prompt if isinstance(initial_prompt, str) else ""
+    diarization = diarization if isinstance(diarization, bool) else False
+    token_str = hf_token.strip() if isinstance(hf_token, str) else ""
+    formats_str = formats if isinstance(formats, str) else "txt,txt_timestamps,srt,vtt,docx,json"
+
+    if token_str:
+        os.environ["HF_TOKEN"] = token_str
+        try:
+            env_file = getattr(settings, "env_file", Path(".env"))
+            if env_file.exists():
+                lines = []
+                for line in env_file.read_text(encoding="utf-8").splitlines():
+                    if line.startswith("HF_TOKEN="):
+                        lines.append(f"HF_TOKEN={token_str}")
+                    else:
+                        lines.append(line)
+                env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    job_id = uuid4().hex
+    clean_filename = Path(filename if isinstance(filename, str) else "meeting_recording.webm").name
+    ext = Path(clean_filename).suffix.lower()
+    if not ext:
+        ext = ".webm"
+        clean_filename += ext
+    if ext not in SUPPORTED_EXTENSIONS:
+        ext = ".webm"
+        clean_filename = f"{Path(clean_filename).stem}.webm"
+
+    destination = settings.upload_dir / f"{job_id}{ext}"
+    try:
+        draft_manager.assemble_recording(session_id, user, destination)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    database.create_job({
+        "id": job_id,
+        "filename": clean_filename,
+        "source_path": str(destination),
+        "requested_model": model,
+        "language": language,
+        "initial_prompt": initial_prompt,
+        "diarization": diarization,
+        "formats": [item.strip() for item in formats_str.split(",") if item.strip()],
+        "created_by": user,
+    })
+    database.add_audit_log(user, "job_created", job_id, f"filename: {clean_filename}")
+    draft_manager.delete_session(session_id, user)
+    return database.get_job(job_id)
+
+
+@app.delete("/api/recordings/{session_id}")
+def cancel_recording(session_id: str, user: str = Depends(current_user)):
+    try:
+        draft_manager.delete_session(session_id, user)
+        return {"ok": True}
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
 
 
 class TranscriptEdit(BaseModel):
     text: str
 
 
+def _check_job_access(job: dict[str, Any], user: str) -> None:
+    account = database.get_user(user)
+    is_admin = bool(account and account.get("role") == "admin")
+    owner = job.get("created_by")
+    if owner is not None:
+        if owner != user and not is_admin:
+            raise HTTPException(status_code=404, detail="Job not found")
+    else:
+        if not is_admin:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+
 @app.get("/api/jobs/{job_id}/preview")
 def preview(job_id: str, user: str = Depends(current_user)):
     job = database.get_job(job_id)
     if not job: raise HTTPException(404, "Job not found")
+    _check_job_access(job, user)
     checkpoint = settings.job_dir / job_id / "segments.json"
     return {"segments": checkpoint.exists() and checkpoint.read_text(encoding="utf-8") or "[]"}
 
@@ -721,6 +896,7 @@ def preview(job_id: str, user: str = Depends(current_user)):
 def edit_preview(job_id: str, edit: TranscriptEdit, user: str = Depends(current_user)):
     job = database.get_job(job_id)
     if not job: raise HTTPException(404, "Job not found")
+    _check_job_access(job, user)
     target = settings.job_dir / job_id / "edited.txt"; target.parent.mkdir(parents=True, exist_ok=True); target.write_text(edit.text, encoding="utf-8")
     database.index_transcript(job_id, job["filename"], job.get("initial_prompt", ""), edit.text)
     return {"ok": True}
@@ -728,6 +904,9 @@ def edit_preview(job_id: str, edit: TranscriptEdit, user: str = Depends(current_
 
 @app.get("/api/jobs/{job_id}/outputs/{filename}")
 def download(job_id: str, filename: str, user: str = Depends(current_user)):
+    job = database.get_job(job_id)
+    if not job: raise HTTPException(404, "Job not found")
+    _check_job_access(job, user)
     target = (settings.job_dir / job_id / "outputs" / filename).resolve()
     output_root = (settings.job_dir / job_id / "outputs").resolve()
     if output_root not in target.parents or not target.exists(): raise HTTPException(404, "Output not found")
@@ -739,11 +918,13 @@ def delete_job(job_id: str, user: str = Depends(current_user)):
     import shutil
     job = database.get_job(job_id)
     if not job: raise HTTPException(404, "Job not found")
+    _check_job_access(job, user)
     for path in (Path(job["source_path"]), settings.job_dir / job_id):
         if path.is_dir(): shutil.rmtree(path, ignore_errors=True)
         else: path.unlink(missing_ok=True)
     database.update_job(job_id, status="deleted")
     database.remove_from_search_index("transcript", job_id)
+    database.add_audit_log(user, "job_deleted", job_id, f"filename: {job.get('filename')}")
     return {"ok": True}
 
 
@@ -846,6 +1027,8 @@ def update_admin_user(
             database.add_audit_log(admin, "user_role_changed", username, f"{account['role']} -> {role}")
         if isinstance(active, int) and active == 0 and account["active"]:
             database.add_audit_log(admin, "user_disabled", username, None)
+        elif isinstance(active, int) and active == 1 and not account["active"]:
+            database.add_audit_log(admin, "user_enabled", username, None)
     return {"ok": True}
 
 
@@ -884,6 +1067,48 @@ def delete_admin_user(username: str, admin: str = Depends(current_admin)):
 def admin_audit_log(actor: str | None = None, action: str | None = None, limit: int = 50, offset: int = 0, _: str = Depends(current_admin)):
     entries, has_more, actors, actions = database.list_audit_log(actor, action, limit, offset)
     return {"entries": entries, "has_more": has_more, "actors": actors, "actions": actions}
+
+
+class LogRetentionPayload(BaseModel):
+    retention_days: int
+
+
+@app.get("/api/admin/logs/settings")
+def get_log_settings(_: str = Depends(current_admin)):
+    retention_days = database.get_log_retention_days()
+    total_logs = database.count_audit_logs()
+    return {
+        "retention_days": retention_days,
+        "available_options": [1, 3, 7],
+        "total_logs": total_logs,
+    }
+
+
+@app.post("/api/admin/logs/settings")
+def update_log_settings(payload: LogRetentionPayload, admin: str = Depends(current_admin)):
+    if payload.retention_days not in {1, 3, 7}:
+        raise HTTPException(status_code=400, detail="Retention days must be 1, 3, or 7")
+    database.set_log_retention_days(payload.retention_days)
+    pruned = database.cleanup_old_audit_logs(payload.retention_days)
+    database.add_audit_log(
+        actor=admin,
+        action="log_retention_updated",
+        target="audit_log",
+        details=f"Retention period set to {payload.retention_days} day(s)",
+    )
+    return {
+        "ok": True,
+        "retention_days": payload.retention_days,
+        "pruned": pruned,
+        "message": f"Log retention updated to {payload.retention_days} day(s).",
+    }
+
+
+@app.post("/api/admin/logs/cleanup")
+def cleanup_logs(_: str = Depends(current_admin)):
+    deleted = database.cleanup_old_audit_logs()
+    draft_manager.cleanup_abandoned_sessions(24)
+    return {"ok": True, "deleted": deleted}
 
 
 @app.get("/api/admin/overview")
@@ -934,3 +1159,123 @@ def update_admin_settings(payload: AdminSettingsPayload, admin: str = Depends(cu
 
     database.add_audit_log(admin, "settings_updated", "hf_token", "Configured Hugging Face token" if token else "Removed Hugging Face token")
     return {"ok": True, "has_token": bool(token)}
+
+
+class NotificationSettingsPayload(BaseModel):
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str | None = None
+    smtp_from_address: str = ""
+    smtp_use_tls: bool = True
+
+
+class TestNotificationPayload(BaseModel):
+    recipient_email: str
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from_address: str | None = None
+    smtp_use_tls: bool | None = None
+
+
+@app.get("/api/admin/notifications/settings")
+def get_notification_settings(_: str = Depends(current_admin)):
+    cfg = notification_service.get_smtp_config()
+    return {
+        "smtp_host": cfg.get("smtp_host", ""),
+        "smtp_port": cfg.get("smtp_port", 587),
+        "smtp_username": cfg.get("smtp_username", ""),
+        "smtp_from_address": cfg.get("smtp_from_address", ""),
+        "smtp_use_tls": cfg.get("smtp_use_tls", True),
+        "has_password": bool(cfg.get("smtp_password")),
+        "is_enabled": bool(cfg.get("smtp_host")),
+    }
+
+
+@app.post("/api/admin/notifications/settings")
+def update_notification_settings(payload: NotificationSettingsPayload, admin: str = Depends(current_admin)):
+    prev_settings = database.get_settings([
+        "smtp_host", "smtp_port", "smtp_username", "smtp_password",
+        "smtp_from_address", "smtp_use_tls"
+    ])
+
+    changed_fields = []
+    host = payload.smtp_host.strip()
+    if host != prev_settings.get("smtp_host", ""):
+        changed_fields.append("host")
+
+    port = int(payload.smtp_port)
+    if str(port) != prev_settings.get("smtp_port", "587"):
+        changed_fields.append("port")
+
+    username = payload.smtp_username.strip()
+    if username != prev_settings.get("smtp_username", ""):
+        changed_fields.append("username")
+
+    from_addr = payload.smtp_from_address.strip()
+    if from_addr != prev_settings.get("smtp_from_address", ""):
+        changed_fields.append("from_address")
+
+    use_tls = payload.smtp_use_tls
+    use_tls_str = "true" if use_tls else "false"
+    if use_tls_str != prev_settings.get("smtp_use_tls", "true"):
+        changed_fields.append("use_tls")
+
+    new_password = payload.smtp_password
+    to_save = {
+        "smtp_host": host,
+        "smtp_port": str(port),
+        "smtp_username": username,
+        "smtp_from_address": from_addr,
+        "smtp_use_tls": use_tls_str,
+    }
+
+    if new_password is not None and new_password.strip() != "":
+        if new_password != prev_settings.get("smtp_password", ""):
+            changed_fields.append("password")
+        to_save["smtp_password"] = new_password
+
+    database.set_settings(to_save)
+
+    details = f"{', '.join(changed_fields)} updated" if changed_fields else "no changes"
+    database.add_audit_log(
+        actor=admin,
+        action="notification_settings_updated",
+        target="smtp_settings",
+        details=details,
+    )
+
+    return {"ok": True, "message": "Notification settings updated successfully"}
+
+
+@app.post("/api/admin/notifications/test")
+def send_test_notification(payload: TestNotificationPayload, admin: str = Depends(current_admin)):
+    recipient = payload.recipient_email.strip()
+    if not recipient:
+        raise HTTPException(status_code=400, detail="Recipient email is required")
+
+    overrides = {}
+    if payload.smtp_host is not None:
+        overrides["smtp_host"] = payload.smtp_host
+    if payload.smtp_port is not None:
+        overrides["smtp_port"] = payload.smtp_port
+    if payload.smtp_username is not None:
+        overrides["smtp_username"] = payload.smtp_username
+    if payload.smtp_password is not None and payload.smtp_password.strip() != "":
+        overrides["smtp_password"] = payload.smtp_password
+    if payload.smtp_from_address is not None:
+        overrides["smtp_from_address"] = payload.smtp_from_address
+    if payload.smtp_use_tls is not None:
+        overrides["smtp_use_tls"] = payload.smtp_use_tls
+
+    success, message = notification_service.send_test_email(
+        recipient_email=recipient,
+        actor=admin,
+        overrides=overrides or None,
+    )
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    return {"ok": True, "message": message}
+

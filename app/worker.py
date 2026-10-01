@@ -17,9 +17,10 @@ LOGGER = logging.getLogger(__name__)
 
 
 class TranscriptionWorker:
-    def __init__(self, settings: Settings, database: Database):
+    def __init__(self, settings: Settings, database: Database, heartbeat_interval: float = 1.0):
         self.settings = settings
         self.database = database
+        self.heartbeat_interval = heartbeat_interval
         self.policy = QueuePolicy(settings.default_model, settings.fallback_model, settings.queue_threshold)
         self.notifier = NotificationService(settings, database)
         self.stop_event = threading.Event()
@@ -99,14 +100,87 @@ class TranscriptionWorker:
         job["detected_language"] = getattr(info, "language", job["language"]) or job["language"]
         job["device"] = "cpu"
         job["compute_type"] = "int8"
+        duration = job["duration"]
         started = time.monotonic()
-        for segment in whisper_segments:
-            if segment.end <= audio_offset:
-                continue
-            segments.append({"start": segment.start, "end": segment.end, "text": segment.text.strip()})
-            checkpoint.write_text(json.dumps(segments, indent=2), encoding="utf-8")
-            duration = getattr(info, "duration", 0) or 0
-            progress = min(99.0, segment.end / duration * 100) if duration else 0
-            elapsed = time.monotonic() - started
-            eta = elapsed * (100 / progress - 1) if progress else None
-            self.database.update_job(job["id"], progress=progress, elapsed_seconds=elapsed, eta_seconds=eta)
+        initial_progress = (audio_offset / duration * 100) if duration and audio_offset else 0.0
+
+        state = {
+            "last_real_progress": initial_progress,
+            "last_real_elapsed": 0.0,
+            "current_eta": None,
+            "last_written_progress": initial_progress,
+        }
+        state_lock = threading.Lock()
+        stop_heartbeat = threading.Event()
+
+        def _heartbeat_worker():
+            while not stop_heartbeat.wait(timeout=self.heartbeat_interval):
+                with state_lock:
+                    current_eta = state["current_eta"]
+                    last_real_progress = state["last_real_progress"]
+                    last_real_elapsed = state["last_real_elapsed"]
+
+                if current_eta is None or current_eta <= 0 or duration <= 0 or last_real_elapsed <= 0:
+                    continue
+
+                now = time.monotonic()
+                dt = now - (started + last_real_elapsed)
+                if dt <= 0:
+                    continue
+
+                remaining_progress = 100.0 - last_real_progress
+                if remaining_progress <= 0:
+                    continue
+
+                # Progress delta from elapsed time vs current ETA
+                # Damping factor ensures estimate stays slightly conservative
+                fraction = dt / (dt + current_eta)
+                delta = fraction * remaining_progress * 0.85
+                interpolated = min(99.0, round(last_real_progress + delta, 1))
+
+                total_elapsed = now - started
+                remaining_eta = max(0.0, round(current_eta - dt, 1))
+
+                with state_lock:
+                    if interpolated > state["last_written_progress"]:
+                        state["last_written_progress"] = interpolated
+                        self.database.update_job(
+                            job["id"],
+                            progress=interpolated,
+                            elapsed_seconds=round(total_elapsed, 1),
+                            eta_seconds=remaining_eta,
+                        )
+
+        heartbeat_thread = threading.Thread(
+            target=_heartbeat_worker,
+            name=f"transcribe-heartbeat-{job['id']}",
+            daemon=True,
+        )
+        heartbeat_thread.start()
+
+        try:
+            for segment in whisper_segments:
+                if segment.end <= audio_offset:
+                    continue
+                segments.append({"start": segment.start, "end": segment.end, "text": segment.text.strip()})
+                checkpoint.write_text(json.dumps(segments, indent=2), encoding="utf-8")
+
+                real_progress = min(99.0, segment.end / duration * 100) if duration else 0.0
+                elapsed = time.monotonic() - started
+                eta = elapsed * (100 / real_progress - 1) if real_progress > 0 else None
+
+                with state_lock:
+                    # Real data always takes precedence over the estimate
+                    state["last_real_progress"] = real_progress
+                    state["last_real_elapsed"] = elapsed
+                    state["current_eta"] = eta
+                    state["last_written_progress"] = real_progress
+                    self.database.update_job(
+                        job["id"],
+                        progress=real_progress,
+                        elapsed_seconds=elapsed,
+                        eta_seconds=eta,
+                    )
+        finally:
+            stop_heartbeat.set()
+            heartbeat_thread.join(timeout=2)

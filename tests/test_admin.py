@@ -320,5 +320,192 @@ def test_admin_settings_get_and_update(admin_state, tmp_path, monkeypatch):
     assert main.get_admin_settings(_="owner")["has_token"] is False
 
 
+def test_notification_settings_crud_and_password_privacy(admin_state, monkeypatch):
+    monkeypatch.setattr(main.notification_service, "database", admin_state)
+
+    # 1. Initial state without DB settings
+    init_res = main.get_notification_settings(_="owner")
+    assert "smtp_password" not in init_res
+    assert isinstance(init_res["has_password"], bool)
+
+    # 2. Save new notification settings
+    payload = main.NotificationSettingsPayload(
+        smtp_host="smtp.sendgrid.net",
+        smtp_port=587,
+        smtp_username="apikey",
+        smtp_password="SG.SecretKey123456",
+        smtp_from_address="transcribe@company.com",
+        smtp_use_tls=True,
+    )
+    save_res = main.update_notification_settings(payload, admin="owner")
+    assert save_res["ok"] is True
+
+    # 3. GET settings: password is write-only, NEVER present in response
+    get_res = main.get_notification_settings(_="owner")
+    assert get_res["smtp_host"] == "smtp.sendgrid.net"
+    assert get_res["smtp_port"] == 587
+    assert get_res["smtp_username"] == "apikey"
+    assert get_res["smtp_from_address"] == "transcribe@company.com"
+    assert get_res["smtp_use_tls"] is True
+    assert get_res["has_password"] is True
+    assert get_res["is_enabled"] is True
+    assert "smtp_password" not in get_res
+    assert "SG.SecretKey123456" not in str(get_res)
+
+    # 4. Update settings with BLANK password -> preserves existing stored password
+    update_payload = main.NotificationSettingsPayload(
+        smtp_host="smtp.updated-relay.net",
+        smtp_port=465,
+        smtp_username="apikey",
+        smtp_password="",  # Blank: means do not overwrite!
+        smtp_from_address="transcribe@company.com",
+        smtp_use_tls=True,
+    )
+    update_res = main.update_notification_settings(update_payload, admin="owner")
+    assert update_res["ok"] is True
+
+    # Verify password was preserved in DB
+    cfg = main.notification_service.get_smtp_config()
+    assert cfg["smtp_host"] == "smtp.updated-relay.net"
+    assert cfg["smtp_port"] == 465
+    assert cfg["smtp_password"] == "SG.SecretKey123456"  # Preserved!
+
+    # 5. Check audit logs for notification_settings_updated (ensure NO password in details)
+    entries, _, _, _ = admin_state.list_audit_log(action="notification_settings_updated")
+    assert len(entries) == 2
+    assert entries[0]["actor"] == "owner"
+    assert "SG.SecretKey123456" not in str(entries[0]["details"])
+    assert "SG.SecretKey123456" not in str(entries[1]["details"])
+
+
+def test_notification_test_endpoint_and_audit(admin_state, monkeypatch):
+    from unittest.mock import MagicMock, patch
+    monkeypatch.setattr(main.notification_service, "database", admin_state)
+
+    # Save working config in DB
+    admin_state.set_settings({
+        "smtp_host": "smtp.office365.com",
+        "smtp_port": "587",
+        "smtp_username": "notifications@legal.org",
+        "smtp_password": "RealPassword123",
+        "smtp_from_address": "notifications@legal.org",
+        "smtp_use_tls": "true",
+    })
+
+    # Test send with mock SMTP
+    mock_server = MagicMock()
+    with patch("smtplib.SMTP", return_value=mock_server) as mock_smtp:
+        payload = main.TestNotificationPayload(recipient_email="test.reviewer@legal.org")
+        test_res = main.send_test_notification(payload, admin="owner")
+        assert test_res["ok"] is True
+
+        mock_smtp.assert_called_once_with(host="smtp.office365.com", port=587, timeout=10.0)
+        mock_server.starttls.assert_called_once()
+        mock_server.login.assert_called_once_with("notifications@legal.org", "RealPassword123")
+        mock_server.send_message.assert_called_once()
+
+    # Check audit log
+    entries, _, _, _ = admin_state.list_audit_log(action="test_notification_sent")
+    assert len(entries) == 1
+    assert entries[0]["actor"] == "owner"
+    assert entries[0]["target"] == "***@legal.org"
+    assert "RealPassword123" not in entries[0]["details"]
+
+
+def test_non_admin_cannot_access_notification_endpoints(admin_state):
+    # Non-admin user "member" must be rejected
+    with pytest.raises(HTTPException) as err1:
+        main.get_notification_settings(_=main.current_admin("member"))
+    assert err1.value.status_code == 403
+
+    with pytest.raises(HTTPException) as err2:
+        payload = main.NotificationSettingsPayload(smtp_host="evil.com")
+        main.update_notification_settings(payload, admin=main.current_admin("member"))
+    assert err2.value.status_code == 403
+
+    with pytest.raises(HTTPException) as err3:
+        test_payload = main.TestNotificationPayload(recipient_email="admin@test.com")
+        main.send_test_notification(test_payload, admin=main.current_admin("member"))
+    assert err3.value.status_code == 403
+
+
+def test_dedicated_settings_pages_access_control(admin_state):
+    main.sessions["admin-session"] = {"username": "owner", "role": "admin"}
+    main.sessions["user-session"] = {"username": "member", "role": "user"}
+
+    # Unauthenticated requests redirect to login / index
+    assert main.settings_redirect_page(None).headers["location"] == "/"
+    assert main.diarization_settings_page(None).headers["location"] == "/"
+    assert main.notification_settings_page(None).headers["location"] == "/"
+    assert main.logs_settings_page(None).headers["location"] == "/"
+
+    # Non-admin user sessions redirect to /
+    assert main.settings_redirect_page("user-session").headers["location"] == "/"
+    assert main.diarization_settings_page("user-session").headers["location"] == "/"
+    assert main.notification_settings_page("user-session").headers["location"] == "/"
+    assert main.logs_settings_page("user-session").headers["location"] == "/"
+
+    # Admin sessions succeed
+    redirect_res = main.settings_redirect_page("admin-session")
+    assert redirect_res.headers["location"] == "/admin/settings/diarization"
+
+    diar_res = main.diarization_settings_page("admin-session")
+    assert diar_res.status_code == 200
+    assert "settings-diarization.html" in str(diar_res.path)
+
+    notif_res = main.notification_settings_page("admin-session")
+    assert notif_res.status_code == 200
+    assert "settings-notifications.html" in str(notif_res.path)
+
+    logs_res = main.logs_settings_page("admin-session")
+    assert logs_res.status_code == 200
+    assert "settings-logs.html" in str(logs_res.path)
+
+
+def test_log_retention_settings_and_sorting(admin_state):
+    from datetime import datetime, timezone, timedelta
+
+    # Check default retention is 1
+    settings = main.get_log_settings("owner")
+    assert settings["retention_days"] == 1
+    assert settings["available_options"] == [1, 3, 7]
+
+    # Reject invalid retention
+    with pytest.raises(HTTPException) as err:
+        main.update_log_settings(main.LogRetentionPayload(retention_days=5), admin="owner")
+    assert err.value.status_code == 400
+
+    # Update retention to 3
+    res = main.update_log_settings(main.LogRetentionPayload(retention_days=3), admin="owner")
+    assert res["ok"] is True
+    assert res["retention_days"] == 3
+    assert main.get_log_settings("owner")["retention_days"] == 3
+
+    # Add logs with distinct timestamps and check sorting: latest must be on top
+    admin_state.add_audit_log("actor1", "action1", "target1", "first")
+    admin_state.add_audit_log("actor2", "action2", "target2", "second")
+
+    result = main.admin_audit_log(limit=50, offset=0, _="owner")
+    entries = result["entries"]
+    assert len(entries) >= 2
+    # Verify latest on top: entries[0].id > entries[1].id
+    assert entries[0]["id"] > entries[1]["id"]
+
+    # Test retention pruning of old logs
+    cutoff_old = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+    with admin_state.connect() as conn:
+        conn.execute("UPDATE audit_log SET created_at = ? WHERE action = 'action1'", (cutoff_old,))
+
+    # Cleanup with retention=3 should delete the 5-day old log
+    deleted = admin_state.cleanup_old_audit_logs(3)
+    assert deleted >= 1
+
+    remaining_actions = [e["action"] for e in main.admin_audit_log(limit=50, offset=0, _="owner")["entries"]]
+    assert "action1" not in remaining_actions
+
+
+
+
+
 
 

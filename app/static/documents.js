@@ -531,6 +531,9 @@ async function loadUser() {
       $('userName').textContent = me.name || me.username;
       $('userName').title = `${me.username}${me.email ? ' · ' + me.email : ''}`;
     }
+    if (me.role === 'admin' && $('navAdmin')) {
+      $('navAdmin').hidden = false;
+    }
   } catch (error) {
     if (error.message.includes('Authentication')) location.href = '/';
   }

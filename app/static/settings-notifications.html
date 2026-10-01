@@ -1,6 +1,11 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Administration | Zingsa Files Center</title><link rel="stylesheet" href="/static/style.css?v=15"></head>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notifications &amp; Email Settings | Zingsa Files Center</title>
+  <link rel="stylesheet" href="/static/style.css?v=15">
+</head>
 <body>
 <!-- Left Navigation Sidebar Drawer -->
 <div id="sidebarBackdrop" class="sidebar-backdrop" aria-hidden="true"></div>
@@ -18,7 +23,7 @@
   <div class="sidebar-content">
     <div class="sidebar-group">
       <div class="sidebar-group-title">ADMINISTRATION</div>
-      <a href="/admin" id="sidebarLinkAdmin" class="sidebar-item active">
+      <a href="/admin" id="sidebarLinkAdmin" class="sidebar-item">
         <span class="sidebar-item-icon">
           <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         </span>
@@ -34,7 +39,7 @@
         </span>
         <span class="sidebar-item-label">Speaker Diarization</span>
       </a>
-      <a href="/admin/settings/notifications" id="sidebarLinkNotifications" class="sidebar-item">
+      <a href="/admin/settings/notifications" id="sidebarLinkNotifications" class="sidebar-item active">
         <span class="sidebar-item-icon">
           <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
         </span>
@@ -86,12 +91,18 @@
           <line x1="3" y1="18" x2="21" y2="18"></line>
         </svg>
       </button>
-      <div class="brand-lockup"><img class="brand-logo" src="/static/assets/logo.jpg" alt="ZINGSA logo"><div><div class="brand-name">Zingsa Files Center</div><div class="brand-subtitle">Administration</div></div></div>
+      <div class="brand-lockup">
+        <img class="brand-logo" src="/static/assets/logo.jpg" alt="ZINGSA logo">
+        <div>
+          <div class="brand-name">Zingsa Files Center</div>
+          <div class="brand-subtitle">Administration</div>
+        </div>
+      </div>
     </div>
     <div class="header-search">
       <div class="search-input-wrapper">
         <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-        <input type="search" id="globalSearch" placeholder="Search files & transcripts..." autocomplete="off">
+        <input type="search" id="globalSearch" placeholder="Search files &amp; transcripts..." autocomplete="off">
         <button id="clearSearch" class="search-clear-btn" type="button" aria-label="Clear search" hidden>&times;</button>
       </div>
       <div id="searchResults" class="search-results-dropdown" hidden></div>
@@ -101,82 +112,88 @@
       <button id="logout" class="quiet">Sign out</button>
     </nav>
   </header>
-  <section class="section-head"><div><p class="eyebrow">PLATFORM OVERVIEW</p><h1>Administration</h1></div></section>
-  <section id="stats" class="stats"></section>
-  <section class="admin-toolbar">
-    <p class="eyebrow">ACCESS CONTROL</p>
-    <button id="addUser">Add new user</button>
+
+
+  <section class="section-head">
+    <div>
+      <p class="eyebrow">SYSTEM SETTINGS</p>
+      <h1>Notifications &amp; Email (SMTP)</h1>
+    </div>
   </section>
-  <section class="panel accounts-panel"><div class="accounts-heading"><div><p class="eyebrow">DIRECTORY</p><h2>Accounts</h2></div></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th>Created</th><th>Created by</th><th>Actions</th></tr></thead><tbody id="users"></tbody></table></div></section>
+
+  <div class="settings-panel">
+    <div class="settings-panel-head">
+      <div>
+        <p class="eyebrow">DELIVERY CONFIGURATION</p>
+        <h2>SMTP Outbound Email</h2>
+      </div>
+      <span class="status-badge" id="smtpBadge">Checking...</span>
+    </div>
+
+    <form id="notificationSettingsForm" class="settings-form">
+      <p class="meta" style="margin: 0 0 18px; line-height: 1.55; max-width: 780px;">
+        Configure SMTP email delivery to notify users when transcription jobs complete or fail. Settings configured here take effect immediately without needing to restart the server.
+      </p>
+
+      <div class="form-grid-2">
+        <label>SMTP Host
+          <input type="text" id="smtpHost" name="smtp_host" placeholder="e.g. smtp.example.com" autocomplete="off">
+        </label>
+        <label>SMTP Port
+          <input type="number" id="smtpPort" name="smtp_port" placeholder="587" min="1" max="65535" autocomplete="off">
+        </label>
+      </div>
+
+      <div class="form-grid-2" style="margin-top: 14px;">
+        <label>SMTP Username
+          <input type="text" id="smtpUsername" name="smtp_username" placeholder="e.g. notifier@example.com" autocomplete="off">
+        </label>
+        <label>SMTP Password
+          <input type="password" id="smtpPassword" name="smtp_password" placeholder="Enter password" autocomplete="new-password">
+        </label>
+      </div>
+
+      <div class="form-grid-2" style="margin-top: 14px; align-items: center;">
+        <label>From Address
+          <input type="email" id="smtpFromAddress" name="smtp_from_address" placeholder="e.g. noreply@example.com" autocomplete="off">
+        </label>
+        <div class="switch-field" style="margin-top: 6px;">
+          <span>Connection Security</span>
+          <label class="switch" style="margin-top: 8px;">
+            <input type="checkbox" id="smtpUseTls" name="smtp_use_tls" checked>
+            <span id="smtpUseTlsLabel">Use TLS (STARTTLS)</span>
+          </label>
+        </div>
+      </div>
+
+      <div style="margin-top: 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+        <button type="submit" id="saveSmtpBtn" style="height: 43px;">Save Settings</button>
+      </div>
+      <p id="notificationFeedback" class="feedback-msg" style="margin-top: 12px;"></p>
+    </form>
+
+    <div class="modal-section" style="margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line);">
+      <h3>Send Test Email</h3>
+      <p class="meta" style="margin: 0 0 14px; line-height: 1.55; max-width: 780px;">
+        Verify your email setup immediately by sending a test message using the configured settings (or currently entered unsaved form values).
+      </p>
+      <div style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
+        <label style="flex: 1; min-width: 260px;">Recipient Email Address
+          <input type="email" id="testRecipientEmail" placeholder="e.g. admin@example.com" autocomplete="off">
+        </label>
+        <button type="button" id="sendTestEmailBtn" class="quiet" style="height: 43px;">Send Test Email</button>
+      </div>
+      <p id="testEmailFeedback" class="feedback-msg" style="margin-top: 12px;"></p>
+    </div>
+  </div>
 
   <footer class="page-footer">
     Zingsa Files Center &middot; Internal use only
   </footer>
 </main>
 
-<dialog id="createUserDialog"><form id="createUserForm" method="dialog"><p class="eyebrow">NEW ACCOUNT</p><h2>Create account</h2><label>Username<input name="username" autocomplete="username" placeholder="e.g. jdoe" required></label><div class="form-grid-2"><label>First name<input name="first_name" placeholder="e.g. John" required></label><label>Surname<input name="surname" placeholder="e.g. Doe" required></label></div><label>Email address<input name="email" type="email" placeholder="e.g. jdoe@example.com" required></label><label>Role<select name="role"><option value="user">User</option><option value="admin">Admin</option></select></label><label>Password<input name="password" type="password" minlength="8" autocomplete="new-password" required></label><label>Confirm password<input name="confirm_password" type="password" minlength="8" autocomplete="new-password" required></label><p id="userError" class="error"></p><div class="dialog-actions"><button type="button" id="cancelCreateUser" class="quiet">Cancel</button><button type="submit">Create account</button></div></form></dialog>
-<dialog id="resetPasswordDialog"><form id="resetPasswordForm" method="dialog"><p class="eyebrow">ACCOUNT SECURITY</p><h2>Reset password</h2><p id="resetPasswordUser" class="meta"></p><label>New password<input name="new_password" type="password" minlength="8" autocomplete="new-password" required></label><label>Confirm password<input name="confirm_password" type="password" minlength="8" autocomplete="new-password" required></label><p id="resetPasswordError" class="error"></p><div class="dialog-actions"><button type="button" id="cancelReset" class="quiet">Cancel</button><button type="submit">Save new password</button></div></form></dialog>
-<dialog id="manageUserDialog">
-  <div class="manage-user-header">
-    <p class="eyebrow">ACCOUNT MANAGEMENT</p>
-    <h2 id="manageUserHeading">Manage Account</h2>
-    <p id="manageUserMeta" class="meta"></p>
-  </div>
-  <form id="manageDetailsForm" class="modal-section">
-    <h3>Profile & Status</h3>
-    <div class="form-grid-2">
-      <label>First name<input id="manageFirstName" name="first_name" required></label>
-      <label>Surname<input id="manageSurname" name="surname" required></label>
-    </div>
-    <label>Email address<input id="manageEmail" name="email" type="email" required></label>
-    <div class="form-grid-2">
-      <label>Role
-        <select id="manageRole" name="role">
-          <option value="user">User</option>
-          <option value="admin">Admin</option>
-        </select>
-      </label>
-      <div class="switch-field">
-        <span>Account Status</span>
-        <label class="switch" style="margin-top: 8px;">
-          <input type="checkbox" id="manageActive" name="active">
-          <span id="manageActiveLabel">Active</span>
-        </label>
-      </div>
-    </div>
-    <p id="manageDetailsMessage" class="feedback-msg"></p>
-    <div class="dialog-actions">
-      <button type="submit">Save Changes</button>
-    </div>
-  </form>
-  <form id="managePasswordForm" class="modal-section">
-    <h3>Reset Password</h3>
-    <p class="meta" style="margin: 0 0 10px;">Set a new password for this user (minimum 8 characters).</p>
-    <div class="form-grid-2">
-      <label>New password<input id="manageNewPassword" name="password" type="password" minlength="8" autocomplete="new-password" placeholder="Enter new password" required></label>
-      <label>Confirm password<input id="manageConfirmPassword" name="confirm_password" type="password" minlength="8" autocomplete="new-password" placeholder="Confirm new password" required></label>
-    </div>
-    <p id="managePasswordMessage" class="feedback-msg"></p>
-    <div class="dialog-actions">
-      <button type="submit" class="quiet">Update Password</button>
-    </div>
-  </form>
-  <div class="modal-section danger-zone-section">
-    <h3>Danger Zone</h3>
-    <div class="danger-zone">
-      <div>
-        <strong>Delete account</strong>
-        <p class="meta" style="margin: 4px 0 0;">Permanently remove this user and terminate all active sessions.</p>
-      </div>
-      <button type="button" id="deleteUserBtn" class="danger-button">Delete Account</button>
-    </div>
-    <p id="deleteUserMessage" class="feedback-msg"></p>
-  </div>
-  <div class="dialog-foot">
-    <button type="button" id="closeManageUser" class="quiet">Done</button>
-  </div>
-</dialog>
 <script src="/static/sidebar.js?v=4"></script>
 <script src="/static/admin.js?v=14"></script>
 <script src="/static/search.js?v=13"></script>
-</body></html>
+</body>
+</html>

@@ -30,13 +30,95 @@ transcription proceeds normally without diarization.
 """
 
 
+def _ensure_torchaudio_compat() -> None:
+    """Ensure torchaudio compatibility with pyannote.audio on newer PyTorch/torchaudio releases.
+
+    Newer torchaudio releases (>=2.2 / >=2.9) removed `list_audio_backends`, `AudioMetaData`,
+    and `torchaudio.info`, and moved `torchaudio.load` to `load_with_torchcodec` which requires
+    the optional `torchcodec` library. This shim backfills them cleanly using `soundfile`.
+    """
+    try:
+        import torchaudio
+    except ImportError:
+        return
+
+    from collections import namedtuple
+    import soundfile as sf
+    import torch
+
+    if not hasattr(torchaudio, "list_audio_backends"):
+        torchaudio.list_audio_backends = lambda: ["soundfile"]
+
+    if not hasattr(torchaudio, "AudioMetaData"):
+        torchaudio.AudioMetaData = namedtuple(
+            "AudioMetaData",
+            ["sample_rate", "num_frames", "num_channels", "bits_per_sample", "encoding"],
+        )
+
+    if not hasattr(torchaudio, "info"):
+        def _compat_info(filepath, backend=None):
+            info = sf.info(filepath)
+            return torchaudio.AudioMetaData(
+                sample_rate=info.samplerate,
+                num_frames=info.frames,
+                num_channels=info.channels,
+                bits_per_sample=16,
+                encoding="PCM_S",
+            )
+        torchaudio.info = _compat_info
+
+    _orig_load = getattr(torchaudio, "load", None)
+
+    def _compat_load(
+        filepath,
+        frame_offset=0,
+        num_frames=-1,
+        normalize=True,
+        channels_first=True,
+        format=None,
+        buffer_size=4096,
+        backend=None,
+    ):
+        try:
+            if _orig_load:
+                return _orig_load(
+                    filepath,
+                    frame_offset=frame_offset,
+                    num_frames=num_frames,
+                    normalize=normalize,
+                    channels_first=channels_first,
+                    format=format,
+                    buffer_size=buffer_size,
+                    backend=backend,
+                )
+        except Exception:
+            pass
+
+        frames_to_read = -1 if (num_frames is None or num_frames < 0) else num_frames
+        data, sample_rate = sf.read(
+            filepath,
+            start=frame_offset,
+            frames=frames_to_read,
+            dtype="float32",
+            always_2d=True,
+        )
+        tensor = torch.from_numpy(data.T if channels_first else data)
+        return tensor, sample_rate
+
+    torchaudio.load = _compat_load
+
+
+_ensure_torchaudio_compat()
+
+
 def is_diarization_available(hf_token: Optional[str] = None) -> Tuple[bool, str]:
     """Check if pyannote.audio is installed and whether a HuggingFace token is provided."""
+    _ensure_torchaudio_compat()
     token = hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
     try:
         import pyannote.audio  # noqa: F401
-    except ImportError:
-        return False, "pyannote.audio is not installed. Run: pip install pyannote.audio"
+    except Exception as exc:
+        return False, f"pyannote.audio is not available ({exc}). Run: pip install pyannote.audio"
 
     if not token:
         return False, "HuggingFace token missing. Diarization requires an HF token to load the pyannote pipeline."
@@ -118,6 +200,7 @@ def diarize_audio(
         )
 
     try:
+        _ensure_torchaudio_compat()
         import torch
 
         pipeline = _load_pipeline(token)

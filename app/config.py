@@ -65,6 +65,10 @@ class Settings:
     def job_dir(self) -> Path:
         return self.data_dir / "jobs"
 
+    @property
+    def recording_draft_dir(self) -> Path:
+        return self.data_dir / "draft_recordings"
+
     def ensure_directories(self) -> None:
-        for path in (self.data_dir, self.upload_dir, self.job_dir, self.model_dir, self.documents_storage_path):
+        for path in (self.data_dir, self.upload_dir, self.job_dir, self.recording_draft_dir, self.model_dir, self.documents_storage_path):
             path.mkdir(parents=True, exist_ok=True)

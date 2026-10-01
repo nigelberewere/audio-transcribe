@@ -442,9 +442,26 @@ Every view in the system follows a predictable 3-tier hierarchy:
 
 <!-- 6. Client Script -->
 <script src="/static/feature.js"></script>
-</body>
-</html>
-```
+### Admin Dashboard & Dedicated Settings Architecture
+The administration interface provides a clean, modular structure featuring a top-left hamburger menu that reveals a sliding left navigation sidebar drawer, keeping settings on their own dedicated pages rather than cluttering a single scrollable view:
+
+1. **Top-Left Hamburger Button (`.top-left-hamburger-btn`, `#hamburgerBtn`)**: Positioned at the far top-left corner of the header card before the brand logo, this button triggers the left-hand navigation sidebar drawer (`#appSidebar`) and backdrop overlay (`#sidebarBackdrop`).
+2. **Left Navigation Sidebar Drawer (`.app-sidebar`, `#appSidebar`)**:
+   - Slides smoothly from the left (`transform: translateX(-100%)` $\rightarrow$ `translateX(0)`).
+   - Contains categorized navigation links:
+     - **Administration**: *Overview & Accounts* (`/admin`)
+     - **System Settings**: *Speaker Diarization* (`/admin/settings/diarization`) and *Notifications & Email* (`/admin/settings/notifications`), each with real-time status badges (`#sidebarHfBadge`, `#sidebarSmtpBadge`).
+     - **Workspace Shortcuts**: Quick links to *Transcription Studio* (`/transcription`), *Document Repository* (`/documents`), and *Home Dashboard* (`/home`).
+   - Closes automatically via close button (`#closeSidebarBtn`), backdrop overlay click, or pressing the <kbd>Escape</kbd> key.
+3. **Dedicated Admin Overview (`admin.html` at `/admin`)**:
+   - Dedicated strictly to platform metrics (`#stats`), Access Control & User Directory (`.accounts-panel`), and Security Audit Log (`.audit-panel`).
+   - All settings panels are removed from this page so admins do not have to scroll past long configuration forms.
+4. **Dedicated Speaker Diarization Settings (`settings-diarization.html` at `/admin/settings/diarization` / `/admin/diarization`)**:
+   - Dedicated page with breadcrumb navigation (`← Administration Overview / Speaker Diarization Settings`).
+   - Hugging Face access token management for Pyannote model gating (`#settingsForm`, `#adminHfToken`, `#saveHfTokenBtn`, `#clearHfTokenBtn`, `#hfBadge`).
+5. **Dedicated Notifications & Email Settings (`settings-notifications.html` at `/admin/settings/notifications` / `/admin/notifications`)**:
+   - Dedicated page with breadcrumb navigation (`← Administration Overview / Notifications & Email Settings`).
+   - Live SMTP outbound email configuration (`#notificationSettingsForm`) and instant test email utility (`#testRecipientEmail`, `#sendTestEmailBtn`, `#smtpBadge`).
 
 ---
 
@@ -495,6 +512,7 @@ Every view in the system follows a predictable 3-tier hierarchy:
 8. **PDF Tools & Document Lineage**: Any document generated through repository utilities (merging, splitting, watermarking, converting) must create a brand-new document record without modifying or overwriting source documents, must record source document IDs in `source_document_ids` for lineage tracking, and must log an audit entry (`document_merged`, `document_split`, `document_watermarked`, `document_converted`).
 9. **Shared Page Footer**: Every top-level page (`Home`, `Transcription`, `Documents`, `Admin`) must include the `.page-footer` element at the bottom of the `.shell` container, styled with `var(--muted)` small text and sitting naturally after the content without sticky/fixed positioning.
 10. **Rich Empty States**: Empty collection states in queues and file lists must render an `.empty-state` container comprising a small themed icon, a bold primary headline, and a secondary action guidance line (e.g. "Drop a file/recording above to get started").
+11. **Settings Resolution Order (DB $\rightarrow$ Environment $\rightarrow$ Defaults)**: Dynamic runtime settings (such as SMTP/notifications, external integrations) must resolve in this order: value in database (`app_settings` table, configured via Admin UI) $\rightarrow$ environment variable $\rightarrow$ built-in default. Sensitive values like passwords/tokens must be write-only via API, masked in UI placeholders (`•••••••• (unchanged)`), never returned in plaintext in GET responses, and never logged to `audit_log`.
 
 ---
 

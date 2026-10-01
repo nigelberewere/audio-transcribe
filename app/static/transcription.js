@@ -10,12 +10,20 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 }
 
+let currentUser = null;
+let currentScope = 'my';
+
 async function loadUser() {
   try {
     const me = await request('/api/me');
+    currentUser = me;
     if ($('userName')) {
       $('userName').textContent = me.name || me.username;
       $('userName').title = `${me.username}${me.email ? ' · ' + me.email : ''}`;
+    }
+    if (me.role === 'admin') {
+      if ($('navAdmin')) $('navAdmin').hidden = false;
+      if ($('jobScopeToggle')) $('jobScopeToggle').hidden = false;
     }
   } catch (error) {
     if (error.message.includes('Authentication')) location.href = '/';
@@ -34,16 +42,30 @@ function formatEta(seconds) {
   return remM > 0 ? `ETA ${h}h ${remM}m` : `ETA ${h}h`;
 }
 
+let jobsPollTimeout = null;
+
 async function loadJobs() {
+  clearTimeout(jobsPollTimeout);
+  let hasActiveWork = false;
   try {
-    const jobs = await request('/api/jobs');
+    const isAllView = currentScope === 'all' && currentUser?.role === 'admin';
+    const url = isAllView ? '/api/jobs?all_jobs=true' : '/api/jobs';
+    const jobs = await request(url);
     const filtered = jobs.filter(job => job.status !== 'deleted');
+    hasActiveWork = filtered.some(job => job.status === 'processing' || job.status === 'waiting');
     filtered.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
     $('jobs').innerHTML = filtered.length
-      ? filtered.map(job => `<article class="job" id="job-${job.id}">
+      ? filtered.map(job => {
+          const modelInfo = job.status === 'waiting'
+            ? `requested ${job.requested_model}`
+            : `requested ${job.requested_model} · used ${job.selected_model || 'pending'}`;
+          const ownerBadge = isAllView && job.created_by
+            ? ` · <span class="tag-owner" title="Uploaded by ${escapeHtml(job.created_by)}">Dept: ${escapeHtml(job.created_by)}</span>`
+            : '';
+          return `<article class="job" id="job-${job.id}">
           <div>
             <h3>${escapeHtml(job.filename)}</h3>
-            <div class="meta">${job.status === 'waiting' ? `Queue position ${job.queue_position}` : job.status} · requested ${job.requested_model} · used ${job.selected_model || 'pending'}${job.diarization ? ' · <span class="tag-diarization">Diarized</span>' : ''}</div>
+            <div class="meta">${job.status === 'waiting' ? `Queue position ${job.queue_position}` : job.status} · ${modelInfo}${ownerBadge}${job.diarization ? ' · <span class="tag-diarization">Diarized</span>' : ''}</div>
             <div class="bar"><i style="width:${job.progress}%"></i></div>
             <div class="meta">${Math.round(job.progress)}% ${job.error ? '· ' + escapeHtml(job.error) : ''}</div>
           </div>
@@ -55,7 +77,8 @@ async function loadJobs() {
             ${job.status === 'done' ? job.formats.map(format => `<a href="/api/jobs/${job.id}/outputs/${job.filename.replace(/\.[^.]+$/, '')}${format === 'txt_timestamps' ? '_timestamps.txt' : '.' + format}">${format}</a>`).join('') : ''}
             <button onclick="removeJob('${job.id}')" class="quiet">Delete</button>
           </div>
-        </article>`).join('')
+        </article>`;
+        }).join('')
       : `
         <div class="empty-state">
           <div class="empty-state-icon">
@@ -66,6 +89,9 @@ async function loadJobs() {
         </div>`;
   } catch (error) {
     if (error.message.includes('Authentication')) location.href = '/';
+  } finally {
+    const nextInterval = hasActiveWork ? 1500 : 3000;
+    jobsPollTimeout = setTimeout(loadJobs, nextInterval);
   }
 }
 
@@ -296,7 +322,325 @@ async function removeJob(id) {
 }
 
 $('refresh').onclick = loadJobs;
-setInterval(loadJobs, 3000);
+if ($('scopeMyJobs')) {
+  $('scopeMyJobs').onclick = () => {
+    currentScope = 'my';
+    $('scopeMyJobs').classList.add('active');
+    $('scopeAllJobs').classList.remove('active');
+    loadJobs();
+  };
+}
+if ($('scopeAllJobs')) {
+  $('scopeAllJobs').onclick = () => {
+    currentScope = 'all';
+    $('scopeAllJobs').classList.add('active');
+    $('scopeMyJobs').classList.remove('active');
+    loadJobs();
+  };
+}
+
+// --- In-Browser Live Audio Recording ---
+let currentUploadMode = 'upload';
+let mediaStream = null;
+let mediaRecorder = null;
+let isRecording = false;
+let isPaused = false;
+let recordedSeconds = 0;
+let timerInterval = null;
+let periodicFlushInterval = null;
+let recordingSessionId = null;
+let nextChunkIndex = 0;
+let unflushedChunks = [];
+let isFlushingChunks = false;
+
+function setUploadMode(mode) {
+  if (isRecording) {
+    if (!confirm('Recording is currently in progress. Switching tabs will abandon this recording. Do you want to continue?')) {
+      return;
+    }
+    cancelLiveRecording();
+  }
+  currentUploadMode = mode;
+  if (mode === 'upload') {
+    $('modeUploadTab')?.classList.add('active');
+    $('modeRecordTab')?.classList.remove('active');
+    $('drop').hidden = false;
+    $('recordArea').hidden = true;
+    $('upload').hidden = false;
+  } else {
+    $('modeRecordTab')?.classList.add('active');
+    $('modeUploadTab')?.classList.remove('active');
+    $('drop').hidden = true;
+    $('recordArea').hidden = false;
+    $('upload').hidden = true;
+  }
+}
+
+$('modeUploadTab')?.addEventListener('click', () => setUploadMode('upload'));
+$('modeRecordTab')?.addEventListener('click', () => setUploadMode('record'));
+
+function getSupportedMimeType() {
+  const types = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/ogg;codecs=opus',
+    'audio/ogg',
+    'audio/mp4',
+  ];
+  for (const t of types) {
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) {
+      return t;
+    }
+  }
+  return '';
+}
+
+function formatHHMMSS(totalSecs) {
+  const h = Math.floor(totalSecs / 3600);
+  const m = Math.floor((totalSecs % 3600) / 60);
+  const s = totalSecs % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(h)}:${pad(m)}:${pad(s)}`;
+}
+
+async function startLiveRecording() {
+  $('recordError').textContent = '';
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    $('recordError').textContent = 'Microphone recording is not supported in this browser or requires an HTTPS / localhost connection.';
+    return;
+  }
+
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+      $('recordError').textContent = 'Microphone access was denied. Please allow microphone permissions in your browser address bar to record.';
+    } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+      $('recordError').textContent = 'No microphone was found on your device. Please connect a microphone and try again.';
+    } else {
+      $('recordError').textContent = `Could not access microphone: ${err.message || err.name}`;
+    }
+    return;
+  }
+
+  const mimeType = getSupportedMimeType();
+  try {
+    mediaRecorder = new MediaRecorder(mediaStream, mimeType ? { mimeType } : undefined);
+  } catch (err) {
+    mediaRecorder = new MediaRecorder(mediaStream);
+  }
+
+  recordingSessionId = 'rec_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+  nextChunkIndex = 0;
+  unflushedChunks = [];
+  recordedSeconds = 0;
+  isRecording = true;
+  isPaused = false;
+  $('recordTimer').textContent = '00:00:00';
+
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) {
+      unflushedChunks.push(e.data);
+    }
+  };
+
+  // Collect data in chunks via MediaRecorder timeslice (1000ms)
+  mediaRecorder.start(1000);
+
+  // Update UI to recording state
+  const pill = $('recordStatusPill');
+  if (pill) {
+    pill.className = 'status failed';
+    pill.textContent = 'RECORDING';
+    pill.hidden = false;
+  }
+  $('startRecordBtn').hidden = true;
+  $('pauseRecordBtn').hidden = false;
+  $('pauseRecordBtn').textContent = 'Pause';
+  $('resumeRecordBtn').hidden = true;
+  $('stopRecordBtn').hidden = false;
+  $('cancelRecordBtn').hidden = false;
+
+  timerInterval = setInterval(() => {
+    if (!isPaused) {
+      recordedSeconds++;
+      $('recordTimer').textContent = formatHHMMSS(recordedSeconds);
+    }
+  }, 1000);
+
+  // Periodically flush captured chunks to server every 20 seconds
+  periodicFlushInterval = setInterval(() => {
+    if (isRecording) {
+      flushChunksToServer();
+    }
+  }, 20000);
+}
+
+async function flushChunksToServer() {
+  if (isFlushingChunks || !recordingSessionId || unflushedChunks.length === 0) return;
+  isFlushingChunks = true;
+  try {
+    while (unflushedChunks.length > 0) {
+      const batch = unflushedChunks.splice(0, unflushedChunks.length);
+      const blob = new Blob(batch, { type: mediaRecorder?.mimeType || 'audio/webm' });
+      const currentIdx = nextChunkIndex++;
+      const form = new FormData();
+      form.append('chunk_index', currentIdx);
+      form.append('chunk', blob, `chunk_${currentIdx}.webm`);
+      await fetch(`/api/recordings/${recordingSessionId}/chunks`, {
+        method: 'POST',
+        body: form
+      });
+    }
+  } catch (err) {
+    console.warn('Periodic chunk backup failed:', err);
+  } finally {
+    isFlushingChunks = false;
+  }
+}
+
+function pauseLiveRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.pause();
+    isPaused = true;
+    const pill = $('recordStatusPill');
+    if (pill) {
+      pill.className = 'status waiting';
+      pill.textContent = 'PAUSED';
+    }
+    $('pauseRecordBtn').hidden = true;
+    $('resumeRecordBtn').hidden = false;
+  }
+}
+
+function resumeLiveRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'paused') {
+    mediaRecorder.resume();
+    isPaused = false;
+    const pill = $('recordStatusPill');
+    if (pill) {
+      pill.className = 'status failed';
+      pill.textContent = 'RECORDING';
+    }
+    $('resumeRecordBtn').hidden = true;
+    $('pauseRecordBtn').hidden = false;
+  }
+}
+
+async function stopLiveRecording() {
+  if (!isRecording) return;
+  isRecording = false;
+  isPaused = false;
+  clearInterval(timerInterval);
+  clearInterval(periodicFlushInterval);
+
+  const stopBtn = $('stopRecordBtn');
+  stopBtn.disabled = true;
+  const originalStopText = stopBtn.textContent;
+  stopBtn.textContent = 'Finalizing...';
+  $('pauseRecordBtn').hidden = true;
+  $('resumeRecordBtn').hidden = true;
+
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(t => t.stop());
+  }
+
+  // Small delay to ensure final ondataavailable chunk is captured
+  await new Promise(r => setTimeout(r, 200));
+
+  try {
+    await flushChunksToServer();
+
+    const isDiarize = $('diarization') ? $('diarization').checked : false;
+    const dateStr = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+    const filename = `Meeting_Recording_${dateStr}.webm`;
+
+    const body = new FormData();
+    body.append('filename', filename);
+    body.append('model', $('model').value);
+    body.append('language', $('language').value);
+    body.append('initial_prompt', $('prompt').value);
+    body.append('formats', $('formats').value);
+    body.append('diarization', isDiarize);
+
+    const res = await fetch(`/api/recordings/${recordingSessionId}/finalize`, {
+      method: 'POST',
+      body
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.detail || res.statusText);
+    }
+
+    $('recordError').textContent = '';
+    resetRecordingUI();
+    loadJobs();
+  } catch (err) {
+    $('recordError').textContent = `Failed to finalize recording: ${err.message}`;
+    stopBtn.disabled = false;
+    stopBtn.textContent = originalStopText;
+  }
+}
+
+async function cancelLiveRecording() {
+  if (isRecording) {
+    if (!confirm('Are you sure you want to discard this recording?')) return;
+  }
+  isRecording = false;
+  isPaused = false;
+  clearInterval(timerInterval);
+  clearInterval(periodicFlushInterval);
+
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(t => t.stop());
+  }
+
+  if (recordingSessionId) {
+    fetch(`/api/recordings/${recordingSessionId}`, { method: 'DELETE' }).catch(() => {});
+  }
+
+  resetRecordingUI();
+}
+
+function resetRecordingUI() {
+  isRecording = false;
+  isPaused = false;
+  recordingSessionId = null;
+  nextChunkIndex = 0;
+  unflushedChunks = [];
+  recordedSeconds = 0;
+  $('recordTimer').textContent = '00:00:00';
+  if ($('recordStatusPill')) $('recordStatusPill').hidden = true;
+  $('startRecordBtn').hidden = false;
+  $('pauseRecordBtn').hidden = true;
+  $('resumeRecordBtn').hidden = true;
+  const stopBtn = $('stopRecordBtn');
+  stopBtn.hidden = true;
+  stopBtn.disabled = false;
+  stopBtn.textContent = 'Stop & Transcribe';
+  $('cancelRecordBtn').hidden = true;
+}
+
+$('startRecordBtn')?.addEventListener('click', startLiveRecording);
+$('pauseRecordBtn')?.addEventListener('click', pauseLiveRecording);
+$('resumeRecordBtn')?.addEventListener('click', resumeLiveRecording);
+$('stopRecordBtn')?.addEventListener('click', stopLiveRecording);
+$('cancelRecordBtn')?.addEventListener('click', cancelLiveRecording);
+
+window.addEventListener('beforeunload', (e) => {
+  if (isRecording) {
+    e.preventDefault();
+    e.returnValue = 'Recording in progress — are you sure you want to leave?';
+    return e.returnValue;
+  }
+});
+
 loadUser();
 loadJobs();
 checkDiarization();

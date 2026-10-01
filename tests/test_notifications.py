@@ -228,3 +228,101 @@ def test_smtp_failure_logs_notification_failed_and_does_not_fail_job(tmp_path, m
     assert entries[0]["actor"] == "system"
     assert entries[0]["action"] == "notification_failed"
     assert entries[0]["details"] == "***@example.com"
+
+
+def test_smtp_settings_resolution_order_db_overrides_env_and_defaults(tmp_path):
+    # Setup Settings with env-like values
+    settings = Settings()
+    settings.data_dir = tmp_path / "storage"
+    settings.model_dir = tmp_path / "models"
+    settings.smtp_host = "env.smtp.com"
+    settings.smtp_port = 25
+    settings.smtp_username = "env_user"
+    settings.smtp_password = "env_password"
+    settings.smtp_from_address = "env@domain.com"
+    settings.smtp_use_tls = False
+    settings.ensure_directories()
+    database = Database(settings.db_path)
+
+    # 1. Without DB entries: falls back to settings/env
+    service = NotificationService(settings, database)
+    cfg = service.get_smtp_config()
+    assert cfg["smtp_host"] == "env.smtp.com"
+    assert cfg["smtp_port"] == 25
+    assert cfg["smtp_username"] == "env_user"
+    assert cfg["smtp_password"] == "env_password"
+    assert cfg["smtp_from_address"] == "env@domain.com"
+    assert cfg["smtp_use_tls"] is False
+    assert service.is_enabled is True
+
+    # 2. Add DB entries: DB overrides env values
+    database.set_settings({
+        "smtp_host": "db.smtp.org",
+        "smtp_port": "587",
+        "smtp_username": "db_user",
+        "smtp_password": "db_password",
+        "smtp_from_address": "db@domain.org",
+        "smtp_use_tls": "true",
+    })
+
+    cfg_db = service.get_smtp_config()
+    assert cfg_db["smtp_host"] == "db.smtp.org"
+    assert cfg_db["smtp_port"] == 587
+    assert cfg_db["smtp_username"] == "db_user"
+    assert cfg_db["smtp_password"] == "db_password"
+    assert cfg_db["smtp_from_address"] == "db@domain.org"
+    assert cfg_db["smtp_use_tls"] is True
+
+    # 3. In-flight overrides (e.g. testing unsaved form values) take highest precedence
+    cfg_override = service.get_smtp_config({
+        "smtp_host": "test.smtp.io",
+        "smtp_port": 465,
+    })
+    assert cfg_override["smtp_host"] == "test.smtp.io"
+    assert cfg_override["smtp_port"] == 465
+    assert cfg_override["smtp_username"] == "db_user"  # Inherits from DB
+
+
+def test_send_test_email_independent_of_job(tmp_path):
+    settings = Settings()
+    settings.data_dir = tmp_path / "storage"
+    settings.model_dir = tmp_path / "models"
+    settings.smtp_host = ""  # Unset in env
+    settings.ensure_directories()
+    database = Database(settings.db_path)
+
+    # Save to DB
+    database.set_settings({
+        "smtp_host": "mail.company.com",
+        "smtp_port": "587",
+        "smtp_username": "mailer",
+        "smtp_password": "secret",
+        "smtp_from_address": "system@company.com",
+        "smtp_use_tls": "true",
+    })
+
+    service = NotificationService(settings, database)
+    mock_server = MagicMock()
+    with patch("smtplib.SMTP", return_value=mock_server) as mock_smtp:
+        success, msg = service.send_test_email("admin@test.org", actor="admin_user")
+        assert success is True
+        assert "Test email sent successfully" in msg
+
+        mock_smtp.assert_called_once_with(host="mail.company.com", port=587, timeout=10.0)
+        mock_server.starttls.assert_called_once()
+        mock_server.login.assert_called_once_with("mailer", "secret")
+        mock_server.send_message.assert_called_once()
+
+        sent_msg = mock_server.send_message.call_args[0][0]
+        assert sent_msg["To"] == "admin@test.org"
+        assert sent_msg["From"] == "system@company.com"
+        assert "Test Email" in sent_msg["Subject"]
+
+    # Check audit log for test_notification_sent
+    entries, _, _, _ = database.list_audit_log(action="test_notification_sent")
+    assert len(entries) == 1
+    assert entries[0]["actor"] == "admin_user"
+    assert entries[0]["action"] == "test_notification_sent"
+    assert entries[0]["target"] == "***@test.org"
+    assert "secret" not in entries[0]["details"]
+
