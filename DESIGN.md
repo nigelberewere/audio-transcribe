@@ -281,16 +281,16 @@ Tables must be wrapped in `.table-wrap` for responsive horizontal scrolling:
   <input id="file" type="file" accept="...">
 </div>
 
-<!-- Documents Repository Upload Zone (50MB Limit) -->
+<!-- Documents Repository Upload Zone -->
 <section id="drop" class="panel drop document-drop">
   <strong>Drop files here to upload</strong>
-  <span>PDF, Word, Excel, PowerPoint, text, and image files, up to 50MB</span>
+  <span>PDF, Word, Excel, PowerPoint, text, and image files</span>
   <input id="file" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf,.odt,.ods,.odp,.jpg,.jpeg,.png">
 </section>
 ```
 *(Style: `border: 2px dashed #c8bda9; border-radius: 8px; padding: 34px; text-align: center; display: grid; gap: 8px; color: var(--muted);`)*
 - **Allowed Document Extensions**: `pdf, doc, docx, xls, xlsx, ppt, pptx, txt, csv, rtf, odt, ods, odp, jpg, jpeg, png`
-- **File Size Limit**: `50MB` (52,428,800 bytes), enforced on both client and server.
+- **File Size**: No application-level upload limit; available storage and runtime limits still apply.
 
 ### 9. Empty State Pattern
 Used when folders or lists have no records:
@@ -508,7 +508,7 @@ The administration interface provides a clean, modular structure featuring a top
 4. **Preserve the Global Header & Navigation**: Every top-level page must include the `<header class="brand-card">` with the Zingsa logo, lockup, and navigation links (`Transcription`, `Documents`, `Sign out`).
 5. **No External CSS Frameworks**: Do not introduce Tailwind, Bootstrap, or component libraries. Maintain the lightweight, zero-dependency vanilla architecture.
 6. **User Badge Never Includes Status Dot**: The user-pill component in the top header (`.user-name`) must strictly render the user's name as plain text without any status dot, indicator icon, or leading pseudo-element (`::before`/`::after`). Never add a status dot to `.user-name`.
-7. **Document Upload Limits and Constraints**: Documents repository uploads are restricted to the defined file types (`pdf, doc, docx, xls, xlsx, ppt, pptx, txt, csv, rtf, odt, ods, odp, jpg, jpeg, png`) with a strict `50MB` size limit. This constraint must always be enforced both client-side (with immediate UI feedback) and server-side (returning a clear 400 error and preventing any unallowed files or database rows from being created).
+7. **Document Upload Constraints**: Documents repository uploads are restricted to the defined file types (`pdf, doc, docx, xls, xlsx, ppt, pptx, txt, csv, rtf, odt, ods, odp, jpg, jpeg, png`). There is no application-level file-size limit.
 8. **PDF Tools & Document Lineage**: Any document generated through repository utilities (merging, splitting, watermarking, converting) must create a brand-new document record without modifying or overwriting source documents, must record source document IDs in `source_document_ids` for lineage tracking, and must log an audit entry (`document_merged`, `document_split`, `document_watermarked`, `document_converted`).
 9. **Shared Page Footer**: Every top-level page (`Home`, `Transcription`, `Documents`, `Admin`) must include the `.page-footer` element at the bottom of the `.shell` container, styled with `var(--muted)` small text and sitting naturally after the content without sticky/fixed positioning.
 10. **Rich Empty States**: Empty collection states in queues and file lists must render an `.empty-state` container comprising a small themed icon, a bold primary headline, and a secondary action guidance line (e.g. "Drop a file/recording above to get started").

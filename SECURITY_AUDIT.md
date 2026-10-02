@@ -6,7 +6,7 @@ Audit scope: `app/` and `tests/`, completed 2026-10-01. The review covered route
 
 - Fixed merge-output path traversal. `output_filename` is now restricted to a simple PDF basename, preventing `..\\`, `/`, absolute paths, and oversized names from escaping document storage.
 - Fixed global Hugging Face token overwrite. User job uploads and recording finalization no longer accept or persist an HF token; token configuration remains admin-only.
-- Fixed unbounded audio uploads. Job uploads now enforce the 50 MB server-side limit and remove partial files on failure.
+- Removed application-level file-size limits from document and audio uploads; partial files are still removed on upload failure.
 - Fixed recording integrity risks. Writes are serialized, malformed metadata is rejected, finalized sessions reject new chunks, and finalization requires contiguous chunk indexes. Recording file-size limits were intentionally removed for the current product requirement.
 - Fixed worker restart/concurrency gaps. Waiting jobs are atomically claimed, interrupted `processing` jobs are recovered to `waiting` at startup, and `wake()` now signals the worker.
 - Fixed browser XSS risk in document actions by replacing inline handlers containing user-controlled tag text with event listeners and dataset values.
@@ -21,7 +21,7 @@ Audit scope: `app/` and `tests/`, completed 2026-10-01. The review covered route
 - Best-effort search-index failures now emit warnings instead of being silently swallowed.
 - Added audit entries for successful login, logout, folder creation, tag changes, profile changes, transcript edits, recording chunks/finalization/cancellation, and log cleanup. Watermark text is no longer recorded verbatim.
 - Added `soundfile==0.14.0` to `requirements.txt`; it is imported by the diarization compatibility layer but was previously undeclared.
-- Added regression tests for traversal, upload limits and cleanup, incomplete recordings, SQL identifier allowlisting, worker recovery, token isolation, and audit redaction.
+- Added regression tests for traversal, oversized-upload cleanup, incomplete recordings, SQL identifier allowlisting, worker recovery, token isolation, and audit redaction.
 
 ## Dead Code Removed
 

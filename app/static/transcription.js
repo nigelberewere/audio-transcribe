@@ -44,9 +44,184 @@ function formatEta(seconds) {
 
 let jobsPollTimeout = null;
 
+document.addEventListener('pointerdown', (event) => {
+  const viewButton = event.target.closest('[data-view-job]');
+  if (viewButton) {
+    event.stopPropagation();
+    openTranscriptViewer(viewButton.dataset.viewJob);
+    return;
+  }
+
+  const removeButton = event.target.closest('[data-remove-job]');
+  if (removeButton) {
+    event.stopPropagation();
+    removeJob(removeButton.dataset.removeJob);
+    return;
+  }
+
+  const moreButton = event.target.closest('.job-more-btn');
+  if (moreButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const menu = document.getElementById(`job-menu-${moreButton.dataset.jobId}`);
+    if (!menu) return;
+    const shouldOpen = menu.hidden;
+    closeJobMenus();
+    if (shouldOpen) {
+      menu.hidden = false;
+      moreButton.setAttribute('aria-expanded', 'true');
+    }
+    return;
+  }
+
+  if (!event.target.closest('.job-actions-menu')) {
+    closeJobMenus();
+  }
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    closeJobMenus();
+  }
+});
+
+function closeJobMenus() {
+  document.querySelectorAll('.job-actions-menu').forEach(menu => {
+    menu.hidden = true;
+  });
+  document.querySelectorAll('.job-more-btn').forEach(button => {
+    button.setAttribute('aria-expanded', 'false');
+  });
+}
+
+function jobActionIcon(type) {
+  const icons = {
+    transcript: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="14" y2="17"/></svg>',
+    txt: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>',
+    txt_timestamps: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>',
+    srt: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10h4M13 10h4M7 14h2M11 14h6"/></svg>',
+    vtt: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10h10M7 14h10"/></svg>',
+    docx: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h8M8 17h6"/></svg>',
+    json: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4C7 4 7 6 7 8v1c0 2-1 3-3 3 2 0 3 1 3 3v1c0 2 0 4 2 4M15 4c2 0 2 2 2 4v1c0 2 1 3 3 3-2 0-3 1-3 3v1c0 2 0 4-2 4"/></svg>',
+    delete: '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M8 6V4h8v2M19 6l-1 14H6L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>'
+  };
+  return `<span class="job-action-icon">${icons[type] || icons.txt}</span>`;
+}
+
+function buildJobMenu(job) {
+  const fileRoot = `/api/jobs/${job.id}/outputs/${job.filename.replace(/\.[^.]+$/, '')}`;
+  const outputActions = job.status === 'done'
+    ? job.formats.map(format => {
+        const fileSuffix = format === 'txt_timestamps' ? '_timestamps.txt' : `.${format}`;
+        const label = format === 'txt_timestamps' ? 'Download TXT timestamps' : `Download ${format.toUpperCase()}`;
+        return `<a class="job-action-link" href="${fileRoot}${fileSuffix}" download>${jobActionIcon(format)}<span>${label}</span></a>`;
+      }).join('')
+    : '';
+
+  return `
+    <div class="job-actions">
+      <button type="button" class="job-more-btn" aria-label="More actions for ${escapeHtml(job.filename)}" aria-expanded="false" data-job-id="${job.id}">⋯</button>
+      <div class="job-actions-menu" id="job-menu-${job.id}" hidden>
+        <button type="button" class="job-action" data-view-job="${job.id}">${jobActionIcon('transcript')}<span>View transcript</span></button>
+        ${outputActions}
+        <button type="button" class="job-action danger" data-remove-job="${job.id}">${jobActionIcon('delete')}<span>Delete job</span></button>
+      </div>
+    </div>
+  `;
+}
+
+async function openTranscriptViewer(jobId) {
+  const modalId = 'transcript-viewer-modal';
+  const existing = document.getElementById(modalId);
+  if (existing) existing.remove();
+
+  const state = { saving: false };
+  const modal = document.createElement('div');
+  modal.id = modalId;
+  modal.className = 'transcript-modal-backdrop';
+  modal.innerHTML = `
+    <div class="transcript-modal" role="dialog" aria-modal="true" aria-labelledby="transcript-modal-title">
+      <div class="transcript-modal-header">
+        <h3 id="transcript-modal-title">Transcript</h3>
+        <button type="button" class="transcript-close-btn" aria-label="Close transcript viewer">&times;</button>
+      </div>
+      <div class="transcript-modal-body">
+        <textarea id="transcript-editor" aria-label="Transcript text" spellcheck="false" placeholder="Loading transcript..."></textarea>
+      </div>
+      <div class="transcript-modal-actions">
+        <button type="button" id="transcript-save-btn" class="primary">Save changes</button>
+        <button type="button" id="transcript-cancel-btn" class="quiet">Close</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  const textarea = modal.querySelector('#transcript-editor');
+  const saveBtn = modal.querySelector('#transcript-save-btn');
+  const closeBtn = modal.querySelector('.transcript-close-btn');
+  const cancelBtn = modal.querySelector('#transcript-cancel-btn');
+
+  const closeModal = () => modal.remove();
+
+  const closeHandlers = [closeBtn, cancelBtn];
+  closeHandlers.forEach(button => button.addEventListener('click', closeModal));
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) closeModal();
+  });
+
+  try {
+    const preview = await request(`/api/jobs/${jobId}/preview`);
+    let transcriptText = '';
+    try {
+      const segments = JSON.parse(preview.segments || '[]');
+      transcriptText = Array.isArray(segments)
+        ? segments.map(segment => (segment && segment.text ? String(segment.text).trim() : '')).filter(Boolean).join('\n\n')
+        : '';
+    } catch {
+      transcriptText = '';
+    }
+    if (!transcriptText.trim()) {
+      transcriptText = 'No transcript content is available yet for this job.';
+    }
+    textarea.value = transcriptText;
+  } catch (error) {
+    textarea.value = 'Unable to load this transcript right now.';
+  }
+
+  saveBtn.addEventListener('click', async () => {
+    if (state.saving) return;
+    state.saving = true;
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+
+    try {
+      await request(`/api/jobs/${jobId}/preview`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: textarea.value })
+      });
+      closeModal();
+    } catch (error) {
+      alert(error.message || 'Unable to save transcript changes.');
+    } finally {
+      state.saving = false;
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save changes';
+    }
+  });
+}
+
+function bindTranscriptMenuActions() {
+  document.querySelectorAll('[data-view-job]').forEach(button => {
+    button.addEventListener('click', () => openTranscriptViewer(button.dataset.viewJob));
+  });
+}
+
 async function loadJobs() {
   clearTimeout(jobsPollTimeout);
   let hasActiveWork = false;
+  const openMenu = document.querySelector('.job-actions-menu:not([hidden])');
+  const openMenuId = openMenu?.id;
   try {
     const isAllView = currentScope === 'all' && currentUser?.role === 'admin';
     const url = isAllView ? '/api/jobs?all_jobs=true' : '/api/jobs';
@@ -73,10 +248,7 @@ async function loadJobs() {
             <span class="status ${job.status}">${job.status}</span>
             ${job.status === 'processing' && job.eta_seconds ? `<span class="job-eta meta" title="${Math.round(job.eta_seconds)}s remaining"><svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>${formatEta(job.eta_seconds)}</span>` : ''}
           </div>
-          <div class="downloads">
-            ${job.status === 'done' ? job.formats.map(format => `<a href="/api/jobs/${job.id}/outputs/${job.filename.replace(/\.[^.]+$/, '')}${format === 'txt_timestamps' ? '_timestamps.txt' : '.' + format}">${format}</a>`).join('') : ''}
-            <button onclick="removeJob('${job.id}')" class="quiet">Delete</button>
-          </div>
+          ${buildJobMenu(job)}
         </article>`;
         }).join('')
       : `
@@ -87,6 +259,15 @@ async function loadJobs() {
           <p class="empty-state-title">No active jobs in the queue.</p>
           <p class="empty-state-guide">Drop a recording above to get started</p>
         </div>`;
+
+    if (openMenuId) {
+      const restoredMenu = document.getElementById(openMenuId);
+      const restoredButton = restoredMenu?.parentElement?.querySelector('.job-more-btn');
+      if (restoredMenu && restoredButton) {
+        restoredMenu.hidden = false;
+        restoredButton.setAttribute('aria-expanded', 'true');
+      }
+    }
   } catch (error) {
     if (error.message.includes('Authentication')) location.href = '/';
   } finally {

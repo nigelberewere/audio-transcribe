@@ -286,8 +286,6 @@ ALLOWED_DOCUMENT_EXTENSIONS = {
     ".ppt", ".pptx", ".txt", ".csv", ".rtf",
     ".odt", ".ods", ".odp", ".jpg", ".jpeg", ".png"
 }
-MAX_DOCUMENT_SIZE_BYTES = 50 * 1024 * 1024  # 50MB
-MAX_AUDIO_SIZE_BYTES = 50 * 1024 * 1024  # 50MB
 
 
 def _validate_document_filename(filename: str | None) -> tuple[str, str]:
@@ -356,8 +354,6 @@ def upload_document(file: UploadFile = File(...), folder_id: str | None = Form(N
         with target.open("wb") as output:
             while chunk := file.file.read(1024 * 1024):
                 size += len(chunk)
-                if size > MAX_DOCUMENT_SIZE_BYTES:
-                    raise ValueError("File exceeds maximum allowed size of 50MB.")
                 output.write(chunk)
     except Exception as exc:
         if target.exists():
@@ -421,8 +417,6 @@ def upload_document_version(document_id: str, file: UploadFile = File(...), chan
         with target.open("wb") as output:
             while chunk := file.file.read(1024 * 1024):
                 size += len(chunk)
-                if size > MAX_DOCUMENT_SIZE_BYTES:
-                    raise ValueError("File exceeds maximum allowed size of 50MB.")
                 output.write(chunk)
     except Exception as exc:
         if target.exists():
@@ -776,8 +770,6 @@ def upload(file: UploadFile = File(...), model: str = Form("auto"), language: st
         with destination.open("wb") as output:
             while chunk := file.file.read(1024 * 1024):
                 size += len(chunk)
-                if size > MAX_AUDIO_SIZE_BYTES:
-                    raise ValueError("File exceeds maximum allowed size of 50MB.")
                 output.write(chunk)
     except Exception as exc:
         destination.unlink(missing_ok=True)

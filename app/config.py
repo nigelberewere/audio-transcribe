@@ -5,6 +5,14 @@ import os
 
 LOGGER = logging.getLogger(__name__)
 
+def _default_ffmpeg_path() -> str:
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        return "ffmpeg"
+
+
 def _load_dotenv(path: Path | None = None) -> None:
     env_file = path or Path(".env")
     if not env_file.is_file():
@@ -35,7 +43,7 @@ class Settings:
         self.data_dir = Path(os.getenv("TRANSCRIBE_DATA_DIR", "storage"))
         self.documents_storage_path = Path(os.getenv("DOCUMENTS_STORAGE_PATH", values.get("documents_storage_path", str(self.data_dir / "documents"))))
         self.model_dir = Path(os.getenv("TRANSCRIBE_MODEL_DIR", "models"))
-        self.ffmpeg_path = os.getenv("TRANSCRIBE_FFMPEG", "ffmpeg")
+        self.ffmpeg_path = os.getenv("TRANSCRIBE_FFMPEG", _default_ffmpeg_path())
         self.default_model = os.getenv("TRANSCRIBE_DEFAULT_MODEL", values["default_model"])
         self.fallback_model = os.getenv("TRANSCRIBE_FALLBACK_MODEL", values["fallback_model"])
         self.queue_threshold = int(os.getenv("TRANSCRIBE_QUEUE_THRESHOLD", values["queue_threshold"]))

@@ -7,7 +7,6 @@ const ALLOWED_EXTENSIONS = new Set([
   'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
   'txt', 'csv', 'rtf', 'odt', 'ods', 'odp', 'jpg', 'jpeg', 'png'
 ]);
-const MAX_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
 
 function validateFile(file) {
   if (!file) return 'No file selected.';
@@ -15,9 +14,6 @@ function validateFile(file) {
   const ext = nameParts.length > 1 ? nameParts.pop().toLowerCase() : '';
   if (!ALLOWED_EXTENSIONS.has(ext)) {
     return `File type '.${ext || 'unknown'}' is not allowed. Allowed types: PDF, Word, Excel, PowerPoint, text, and image files.`;
-  }
-  if (file.size > MAX_SIZE_BYTES) {
-    return `File exceeds the 50MB size limit (${(file.size / (1024 * 1024)).toFixed(1)}MB).`;
   }
   return null;
 }

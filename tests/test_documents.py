@@ -222,9 +222,9 @@ def test_change_note_recorded_and_old_version_downloadable(document_state):
     assert Path(download_v2.path).read_bytes() == v2_content
 
 
-# --- Restrictions & Size Limit Tests ---
+# --- Upload Type Tests ---
 
-def test_upload_allowed_type_under_50mb_succeeds(document_state):
+def test_upload_allowed_type_succeeds(document_state):
     pdf_bytes = make_pdf(pages=1, text="Test Document")
     doc = main.upload_document(upload("report.pdf", pdf_bytes, "application/pdf"), None, "", "member")
     assert doc is not None
@@ -249,7 +249,7 @@ def test_upload_disallowed_type_rejected_and_leaves_no_traces(document_state):
     assert current_files == initial_files
 
 
-def test_upload_over_50mb_rejected_and_leaves_no_traces(document_state, monkeypatch):
+def test_upload_over_50mb_succeeds(document_state):
     storage_root = main.settings.documents_storage_path
     initial_files = list(storage_root.glob("**/*"))
 
@@ -269,16 +269,11 @@ def test_upload_over_50mb_rejected_and_leaves_no_traces(document_state, monkeypa
     over_50mb = LargeStream(50 * 1024 * 1024 + 1024)
     file_obj = UploadFile(over_50mb, filename="large_report.pdf", headers={"content-type": "application/pdf"})
 
-    with pytest.raises(HTTPException) as error:
-        main.upload_document(file_obj, None, "", "member")
-    assert error.value.status_code == 400
-    assert "50mb" in error.value.detail.lower()
-
-    # Confirm no DB row created
-    assert document_state.list_documents() == []
-    # Confirm no files written to storage
-    current_files = list(storage_root.glob("**/*"))
-    assert current_files == initial_files
+    doc = main.upload_document(file_obj, None, "", "member")
+    assert doc["filename"] == "large_report.pdf"
+    assert doc["file_size"] == 50 * 1024 * 1024 + 1024
+    assert Path(doc["storage_path"]).is_file()
+    assert len(document_state.list_documents()) == 1
 
 
 # --- PDF Tools: Merge Tests ---

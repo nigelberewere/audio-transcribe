@@ -314,9 +314,9 @@ def test_diarization_status_and_upload_does_not_accept_user_token(tmp_path, monk
     assert os.environ.get("HF_TOKEN") is None
 
 
-def test_audio_upload_enforces_server_side_size_limit(tmp_path, monkeypatch):
+def test_audio_upload_has_no_server_side_size_limit(tmp_path, monkeypatch):
     from io import BytesIO
-    from fastapi import HTTPException, UploadFile
+    from fastapi import UploadFile
     from app import main
 
     settings = Settings()
@@ -325,13 +325,18 @@ def test_audio_upload_enforces_server_side_size_limit(tmp_path, monkeypatch):
     database = Database(settings.db_path)
     monkeypatch.setattr(main, "database", database)
     monkeypatch.setattr(main, "settings", settings)
-    monkeypatch.setattr(main, "MAX_AUDIO_SIZE_BYTES", 4)
+    job = main.upload(
+        UploadFile(BytesIO(b"12345"), filename="large.mp3"),
+        model="auto",
+        language="auto",
+        initial_prompt="",
+        diarization=False,
+        formats="txt",
+        user="user",
+    )
 
-    with pytest.raises(HTTPException) as exc:
-        main.upload(UploadFile(BytesIO(b"12345"), filename="too-large.mp3"), user="user")
-
-    assert exc.value.status_code == 400
-    assert not list(settings.upload_dir.iterdir())
+    assert job["filename"] == "large.mp3"
+    assert (settings.upload_dir / f'{job["id"]}.mp3').read_bytes() == b"12345"
 
 
 def test_transcription_heartbeat_interpolates_progress_smoothly(tmp_path, monkeypatch):

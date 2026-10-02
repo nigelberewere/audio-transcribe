@@ -156,7 +156,7 @@ button.quiet:active, .quiet:active {
 
 .section-head { margin: 52px 0 14px; }
 .jobs { display: grid; gap: 12px; }
-.job { display: grid; grid-template-columns: 1fr 180px 120px; gap: 20px; align-items: center; padding: 18px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 6px 18px var(--shadow); }
+.job { display: grid; grid-template-columns: 1fr 180px 44px; gap: 20px; align-items: center; padding: 18px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 6px 18px var(--shadow); }
 .job h3 { margin: 0 0 7px; font-size: 16px; word-break: break-word; }
 .meta { color: var(--muted); font-size: 13px; }
 .job-status-col { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 8px; min-width: 0; }
@@ -170,10 +170,45 @@ button.quiet:active, .quiet:active {
 .bar { grid-column: 1 / -1; height: 7px; overflow: hidden; border-radius: 10px; background: var(--line); }
 .bar i { display: block; width: 0; height: 100%; background: var(--teal); transition: width 0.6s ease-out; }
 .job:not(:has(.status.processing)) .bar { display: none; }
-.downloads { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--line); }
-.downloads a { color: var(--teal); font-size: 12px; font-weight: bold; text-decoration: none; }
-.downloads a:hover { color: var(--ink); text-decoration: underline; }
-.downloads button { margin-left: auto; }
+.job-actions { position: relative; display: flex; justify-content: flex-end; align-items: center; }
+.job-more-btn { width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--ink); padding: 0; font-size: 24px; line-height: 1; display: grid; place-items: center; cursor: pointer; }
+.job-more-btn:hover { background: var(--blue); border-color: var(--teal); color: var(--teal); }
+.job-actions-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 20; display: grid; min-width: 220px; padding: 8px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 28px rgba(24, 36, 43, 0.12); }
+.job-actions-menu[hidden] { display: none; }
+.job-action-link, .job-action { display: flex; align-items: center; justify-content: flex-start; gap: 10px; width: 100%; padding: 10px 12px; border: none; border-radius: 8px; background: transparent; color: var(--ink); font: inherit; text-decoration: none; text-align: left; cursor: pointer; }
+.job-action-icon { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: 0 0 16px; color: currentColor; }
+.job-action-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.job-action-link:hover, .job-action:hover { background: var(--blue); color: var(--teal); }
+.job-action.danger { color: var(--danger); }
+.job-action.danger:hover { background: rgba(212, 81, 59, 0.08); color: var(--danger); }
+.transcript-modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(17, 24, 39, 0.45); z-index: 99; padding: 24px; }
+.transcript-modal { width: min(760px, 100%); background: var(--card); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 18px 48px rgba(16, 40, 63, 0.18); display: flex; flex-direction: column; overflow: hidden; }
+.transcript-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+.transcript-modal-header h3 { margin: 0; font-size: 18px; }
+.transcript-close-btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.15s ease;
+}
+.transcript-close-btn:hover {
+  background: var(--card);
+  color: var(--ink);
+  border-color: var(--ink);
+}
+.transcript-modal-body { padding: 18px 20px; }
+#transcript-editor { width: 100%; min-height: 420px; resize: vertical; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: #fff; color: var(--ink); font: 14px/1.6 'SFMono-Regular', Consolas, monospace; }
+.transcript-modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 0 20px 20px; }
+.transcript-modal-actions .primary { background: var(--ink); }
 .error { min-height: 18px; color: var(--danger); }
 
 @media (max-width: 640px) {
