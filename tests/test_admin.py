@@ -320,6 +320,39 @@ def test_admin_settings_get_and_update(admin_state, tmp_path, monkeypatch):
     assert main.get_admin_settings(_="owner")["has_token"] is False
 
 
+def test_export_formats_settings_are_admin_only_validated_and_audited(admin_state):
+    assert main.get_export_formats(_="owner")["formats"]
+    with pytest.raises(HTTPException) as error:
+        main.current_admin("member")
+    assert error.value.status_code == 403
+    with pytest.raises(HTTPException) as error:
+        main.update_export_formats(main.ExportFormatsPayload(formats=[]), admin="owner")
+    assert error.value.status_code == 400
+    with pytest.raises(HTTPException) as error:
+        main.current_admin("member")
+    assert error.value.status_code == 403
+
+    result = main.update_export_formats(main.ExportFormatsPayload(formats=["txt", "json"]), admin="owner")
+    assert result["formats"] == ["txt", "json"]
+    assert main.allowed_export_formats() == ["txt", "json"]
+    with admin_state.connect() as connection:
+        row = connection.execute(
+            "SELECT actor, action, target, details FROM audit_log WHERE action = 'export_formats_updated'"
+        ).fetchone()
+    assert tuple(row) == ("owner", "export_formats_updated", "export_formats", "changed: txt_timestamps, srt, vtt, docx")
+
+
+def test_job_formats_round_trip_and_setting_changes_do_not_rewrite_existing_jobs(admin_state):
+    job = {
+        "id": "formats-job", "filename": "meeting.mp3", "source_path": "meeting.mp3",
+        "requested_model": "auto", "language": "auto", "initial_prompt": "",
+        "diarization": False, "formats": ["txt", "json"], "created_by": "owner",
+    }
+    admin_state.create_job(job)
+    main.update_export_formats(main.ExportFormatsPayload(formats=["srt"]), admin="owner")
+    assert admin_state.get_job("formats-job")["formats"] == ["txt", "json"]
+
+
 def test_notification_settings_crud_and_password_privacy(admin_state, monkeypatch):
     monkeypatch.setattr(main.notification_service, "database", admin_state)
 

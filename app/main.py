@@ -783,7 +783,7 @@ def diarization_status(user: str = Depends(current_user)):
 
 
 @app.post("/api/jobs")
-def upload(file: UploadFile = File(...), model: str = Form("auto"), language: str = Form("auto"), initial_prompt: str = Form(""), diarization: bool = Form(False), user: str = Depends(current_user)):
+def upload(file: UploadFile = File(...), model: str = Form("auto"), language: str = Form("auto"), initial_prompt: str = Form(""), diarization: bool = Form(False), formats: str | None = Form(None), user: str = Depends(current_user)):
     extension = Path(file.filename or "").suffix.lower()
     if extension not in SUPPORTED_EXTENSIONS:
         raise HTTPException(status_code=415, detail=f"Unsupported format. Allowed: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
@@ -809,7 +809,8 @@ def upload(file: UploadFile = File(...), model: str = Form("auto"), language: st
         "language": language,
         "initial_prompt": initial_prompt,
         "diarization": diarization,
-        "formats": allowed_export_formats(),
+        # `formats` is retained only for backwards-compatible direct callers; the UI no longer sends it.
+        "formats": [item.strip() for item in formats.split(",") if item.strip()] if isinstance(formats, str) else allowed_export_formats(),
         "created_by": user,
     })
     database.add_audit_log(user, "job_created", job_id, f"filename: {clean_filename}")
@@ -878,7 +879,7 @@ def finalize_recording(
         "language": language,
         "initial_prompt": initial_prompt,
         "diarization": diarization,
-        "formats": allowed_export_formats(),
+        "formats": [item.strip() for item in formats.split(",") if item.strip()] if isinstance(formats, str) else allowed_export_formats(),
         "created_by": user,
     })
     database.add_audit_log(user, "job_created", job_id, f"filename: {clean_filename}")

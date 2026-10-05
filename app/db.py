@@ -9,7 +9,7 @@ LOGGER = logging.getLogger(__name__)
 USER_UPDATE_FIELDS = {"role", "active", "first_name", "surname", "email", "password_hash"}
 JOB_UPDATE_FIELDS = {
     "status", "selected_model", "progress", "elapsed_seconds", "eta_seconds", "error",
-    "completed_at", "duration", "detected_language", "device", "compute_type", "created_at",
+    "completed_at", "duration", "detected_language", "device", "compute_type", "created_at", "formats",
 }
 
 
