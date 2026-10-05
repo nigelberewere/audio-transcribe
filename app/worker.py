@@ -79,6 +79,16 @@ class TranscriptionWorker:
                 checkpoint.write_text(json.dumps(segments, indent=2), encoding="utf-8")
             completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ")
             job["completed_at"] = completed_at
+            raw_formats = self.database.get_settings(["allowed_export_formats"]).get("allowed_export_formats")
+            if raw_formats:
+                try:
+                    configured = json.loads(raw_formats)
+                except json.JSONDecodeError:
+                    configured = raw_formats.split(",")
+                job["formats"] = [fmt for fmt in ("txt", "txt_timestamps", "srt", "vtt", "docx", "json") if fmt in configured]
+                if not job["formats"]:
+                    job["formats"] = ["txt", "txt_timestamps", "srt", "vtt", "docx", "json"]
+            self.database.update_job(job["id"], formats=job["formats"])
             write_outputs(job, segments, job_root / "outputs")
             self.database.update_job(job["id"], status="done", progress=100, elapsed_seconds=0, eta_seconds=0, completed_at=completed_at)
             transcript_text = "\n".join(s.get("text", "").strip() for s in segments if s.get("text", "").strip())

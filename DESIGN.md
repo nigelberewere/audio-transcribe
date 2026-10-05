@@ -450,7 +450,7 @@ The administration interface provides a clean, modular structure featuring a top
    - Slides smoothly from the left (`transform: translateX(-100%)` $\rightarrow$ `translateX(0)`).
    - Contains categorized navigation links:
      - **Administration**: *Overview & Accounts* (`/admin`)
-     - **System Settings**: *Speaker Diarization* (`/admin/settings/diarization`) and *Notifications & Email* (`/admin/settings/notifications`), each with real-time status badges (`#sidebarHfBadge`, `#sidebarSmtpBadge`).
+     - **System Settings**: *Speaker Diarization* (`/admin/settings/diarization`), *Notifications & Email* (`/admin/settings/notifications`), and *Export Formats* (`/admin/settings/export-formats`), each in the admin dashboard settings group.
      - **Workspace Shortcuts**: Quick links to *Transcription Studio* (`/transcription`), *Document Repository* (`/documents`), and *Home Dashboard* (`/home`).
    - Closes automatically via close button (`#closeSidebarBtn`), backdrop overlay click, or pressing the <kbd>Escape</kbd> key.
 3. **Dedicated Admin Overview (`admin.html` at `/admin`)**:

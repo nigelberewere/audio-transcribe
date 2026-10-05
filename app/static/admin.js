@@ -853,12 +853,13 @@ async function initPage() {
     } catch {
       location.href = '/admin/login';
     }
-  } else if ($('settingsForm') || $('notificationSettingsForm') || $('logRetentionForm') || $('auditLog')) {
+  } else if ($('settingsForm') || $('notificationSettingsForm') || $('logRetentionForm') || $('auditLog') || $('exportFormatsForm')) {
     // Dedicated settings pages
     await loadAdminUser();
     if ($('settingsForm')) {
       await loadAdminSettings();
     }
+    if ($('exportFormatsForm')) initExportFormats();
     if ($('notificationSettingsForm')) {
       await loadNotificationSettings();
     }
@@ -870,6 +871,18 @@ async function initPage() {
   }
 }
 
+async function initExportFormats() {
+  const choices = $('exportFormatsChoices');
+  try {
+    const data = await request('/api/admin/export-formats');
+    choices.innerHTML = data.formats.map(item => `<label class="switch-field"><span>${item.id}</span><input type="checkbox" name="format" value="${item.id}" ${item.enabled ? 'checked' : ''}></label>`).join('');
+    $('exportFormatsForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const formats = [...document.querySelectorAll('input[name="format"]:checked')].map(input => input.value);
+      try { const result = await request('/api/admin/export-formats', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({formats})}); $('exportFormatsFeedback').textContent = `Saved ${result.formats.join(', ')}.`; }
+      catch (error) { $('exportFormatsFeedback').textContent = error.message; }
+    });
+  } catch (error) { $('exportFormatsFeedback').textContent = error.message; }
+}
+
 initPage();
-
-

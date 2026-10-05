@@ -34,6 +34,18 @@ notification_service = NotificationService(settings, database)
 worker = TranscriptionWorker(settings, database)
 draft_manager = RecordingDraftManager(settings.recording_draft_dir)
 sessions: dict[str, dict[str, str]] = {}
+EXPORT_FORMATS = ("txt", "txt_timestamps", "srt", "vtt", "docx", "json")
+
+
+def allowed_export_formats() -> list[str]:
+    raw = database.get_settings(["allowed_export_formats"]).get("allowed_export_formats")
+    if not raw:
+        return list(EXPORT_FORMATS)
+    try:
+        values = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        values = [item.strip() for item in raw.split(",")]
+    return [item for item in EXPORT_FORMATS if item in values] or list(EXPORT_FORMATS)
 
 
 @asynccontextmanager
@@ -164,6 +176,16 @@ def logs_settings_page(session: str | None = Cookie(default=None)) -> Response:
     except HTTPException:
         return RedirectResponse("/", status_code=303)
     return FileResponse(Path(__file__).parent / "static" / "settings-logs.html")
+
+
+@app.get("/admin/settings/export-formats", response_class=HTMLResponse)
+@app.get("/admin/export-formats", response_class=HTMLResponse)
+def export_formats_settings_page(session: str | None = Cookie(default=None)) -> Response:
+    try:
+        current_admin(current_user(session))
+    except HTTPException:
+        return RedirectResponse("/", status_code=303)
+    return FileResponse(Path(__file__).parent / "static" / "settings-export-formats.html")
 
 
 @app.post("/api/login")
@@ -761,7 +783,7 @@ def diarization_status(user: str = Depends(current_user)):
 
 
 @app.post("/api/jobs")
-def upload(file: UploadFile = File(...), model: str = Form("auto"), language: str = Form("auto"), initial_prompt: str = Form(""), diarization: bool = Form(False), formats: str = Form("txt,txt_timestamps,srt,vtt,docx,json"), user: str = Depends(current_user)):
+def upload(file: UploadFile = File(...), model: str = Form("auto"), language: str = Form("auto"), initial_prompt: str = Form(""), diarization: bool = Form(False), user: str = Depends(current_user)):
     extension = Path(file.filename or "").suffix.lower()
     if extension not in SUPPORTED_EXTENSIONS:
         raise HTTPException(status_code=415, detail=f"Unsupported format. Allowed: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
@@ -787,7 +809,7 @@ def upload(file: UploadFile = File(...), model: str = Form("auto"), language: st
         "language": language,
         "initial_prompt": initial_prompt,
         "diarization": diarization,
-        "formats": [item.strip() for item in formats.split(",") if item.strip()],
+        "formats": allowed_export_formats(),
         "created_by": user,
     })
     database.add_audit_log(user, "job_created", job_id, f"filename: {clean_filename}")
@@ -820,14 +842,13 @@ def finalize_recording(
     language: str = Form("auto"),
     initial_prompt: str = Form(""),
     diarization: bool = Form(False),
-    formats: str = Form("txt,txt_timestamps,srt,vtt,docx,json"),
+    formats: str | None = Form(None),  # legacy input accepted but intentionally ignored
     user: str = Depends(current_user),
 ):
     model = model if isinstance(model, str) else "auto"
     language = language if isinstance(language, str) else "auto"
     initial_prompt = initial_prompt if isinstance(initial_prompt, str) else ""
     diarization = diarization if isinstance(diarization, bool) else False
-    formats_str = formats if isinstance(formats, str) else "txt,txt_timestamps,srt,vtt,docx,json"
 
     job_id = uuid4().hex
     clean_filename = Path(filename if isinstance(filename, str) else "meeting_recording.webm").name
@@ -857,7 +878,7 @@ def finalize_recording(
         "language": language,
         "initial_prompt": initial_prompt,
         "diarization": diarization,
-        "formats": [item.strip() for item in formats_str.split(",") if item.strip()],
+        "formats": allowed_export_formats(),
         "created_by": user,
     })
     database.add_audit_log(user, "job_created", job_id, f"filename: {clean_filename}")
@@ -953,6 +974,25 @@ def regenerate_speaker_outputs(job_id: str, user: str = Depends(current_user)):
     job, segments = _completed_diarized_job(job_id, user)
     output_dir = settings.job_dir / job_id / "outputs"
     paths = write_outputs(job, segments, output_dir, database.list_speaker_names(job_id))
+    return {"ok": True, "outputs": [path.name for path in paths]}
+
+
+@app.post("/api/jobs/{job_id}/exports/regenerate")
+def regenerate_exports(job_id: str, user: str = Depends(current_user)):
+    job = database.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    _check_job_access(job, user)
+    if job.get("status") != "done":
+        raise HTTPException(status_code=400, detail="Exports can only be regenerated for completed jobs.")
+    try:
+        segments = json.loads((settings.job_dir / job_id / "segments.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="This job has no usable transcript segments.") from exc
+    job["formats"] = allowed_export_formats()
+    paths = write_outputs(job, segments, settings.job_dir / job_id / "outputs", database.list_speaker_names(job_id))
+    database.update_job(job_id, formats=job["formats"])
+    database.add_audit_log(user, "exports_regenerated", job_id, f"formats: {', '.join(job['formats'])}")
     return {"ok": True, "outputs": [path.name for path in paths]}
 
 
@@ -1245,6 +1285,32 @@ class NotificationSettingsPayload(BaseModel):
     smtp_password: str | None = None
     smtp_from_address: str = ""
     smtp_use_tls: bool = True
+
+
+class ExportFormatsPayload(BaseModel):
+    formats: list[str]
+
+
+@app.get("/api/admin/export-formats")
+def get_export_formats(_: str = Depends(current_admin)):
+    enabled = allowed_export_formats()
+    return {"formats": [{"id": item, "enabled": item in enabled} for item in EXPORT_FORMATS]}
+
+
+@app.post("/api/admin/export-formats")
+def update_export_formats(payload: ExportFormatsPayload, admin: str = Depends(current_admin)):
+    requested = set(payload.formats)
+    invalid = requested - set(EXPORT_FORMATS)
+    if invalid:
+        raise HTTPException(status_code=400, detail="Unknown export format")
+    if not requested:
+        raise HTTPException(status_code=400, detail="At least one export format must remain enabled")
+    previous = allowed_export_formats()
+    enabled = [item for item in EXPORT_FORMATS if item in requested]
+    changed = [item for item in EXPORT_FORMATS if (item in previous) != (item in enabled)]
+    database.set_setting("allowed_export_formats", json.dumps(enabled))
+    database.add_audit_log(admin, "export_formats_updated", "export_formats", f"changed: {', '.join(changed) or 'none'}")
+    return {"ok": True, "formats": enabled}
 
 
 class TestNotificationPayload(BaseModel):

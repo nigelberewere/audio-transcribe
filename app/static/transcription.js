@@ -568,7 +568,6 @@ $('upload').onclick = async () => {
   body.append('model', $('model').value);
   body.append('language', $('language').value);
   body.append('initial_prompt', $('prompt').value);
-  body.append('formats', $('formats').value);
   body.append('diarization', isDiarize);
 
   try {
@@ -831,7 +830,6 @@ async function stopLiveRecording() {
     body.append('model', $('model').value);
     body.append('language', $('language').value);
     body.append('initial_prompt', $('prompt').value);
-    body.append('formats', $('formats').value);
     body.append('diarization', isDiarize);
 
     const res = await fetch(`/api/recordings/${recordingSessionId}/finalize`, {
@@ -912,4 +910,3 @@ window.addEventListener('beforeunload', (e) => {
 loadUser();
 loadJobs();
 checkDiarization();
-
