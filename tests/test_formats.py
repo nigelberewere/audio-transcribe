@@ -93,6 +93,33 @@ def test_docx_metadata_table_never_contains_literal_none(tmp_path):
     assert any(m in row_dict["Date processed"] for m in ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"))
 
 
+def test_speaker_names_are_applied_to_exports_without_changing_segments(tmp_path):
+    job = {
+        "id": "job-speakers",
+        "filename": "meeting.wav",
+        "formats": ["txt", "srt", "docx"],
+        "selected_model": "medium",
+        "duration": 4.0,
+        "completed_at": "2026-09-23T12:00:00",
+    }
+    segments = [
+        {"start": 0.0, "end": 1.0, "speaker": "Speaker 1", "text": "Welcome."},
+        {"start": 1.2, "end": 2.0, "speaker": "Speaker 2", "text": "Thank you."},
+    ]
+
+    write_outputs(job, segments, tmp_path, {"Speaker 1": "Alice"})
+
+    assert "Alice: Welcome." in (tmp_path / "meeting.txt").read_text(encoding="utf-8")
+    assert "Speaker 2: Thank you." in (tmp_path / "meeting.txt").read_text(encoding="utf-8")
+    assert "Alice: Welcome." in (tmp_path / "meeting.srt").read_text(encoding="utf-8")
+    assert "Speaker 2: Thank you." in (tmp_path / "meeting.srt").read_text(encoding="utf-8")
+    from docx import Document
+    docx_text = "\n".join(paragraph.text for paragraph in Document(tmp_path / "meeting.docx").paragraphs)
+    assert "Alice: Welcome." in docx_text
+    assert "Speaker 2: Thank you." in docx_text
+    assert segments[0]["speaker"] == "Speaker 1"
+
+
 def test_format_datetime_variations():
     from datetime import datetime
     from app.formats import format_datetime

@@ -41,6 +41,15 @@ CREATE TABLE IF NOT EXISTS jobs (
     device TEXT,
     compute_type TEXT
 );
+CREATE TABLE IF NOT EXISTS speaker_names (
+    job_id TEXT NOT NULL,
+    speaker_label TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    updated_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (job_id, speaker_label),
+    FOREIGN KEY (job_id) REFERENCES jobs(id)
+);
 CREATE TABLE IF NOT EXISTS users (
     username TEXT PRIMARY KEY,
     password_hash TEXT NOT NULL,
@@ -436,6 +445,30 @@ class Database:
             else:
                 rows = connection.execute("SELECT * FROM jobs ORDER BY created_at DESC").fetchall()
         return [self._decode(row) for row in rows]
+
+    def list_speaker_names(self, job_id: str) -> dict[str, str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT speaker_label, display_name FROM speaker_names WHERE job_id = ? ORDER BY speaker_label",
+                (job_id,),
+            ).fetchall()
+        return {row["speaker_label"]: row["display_name"] for row in rows}
+
+    def replace_speaker_names(self, job_id: str, names: dict[str, str], updated_by: str) -> None:
+        timestamp = now()
+        with self.connect() as connection:
+            for speaker_label, display_name in names.items():
+                if display_name:
+                    connection.execute(
+                        "INSERT INTO speaker_names (job_id, speaker_label, display_name, updated_by, updated_at) VALUES (?, ?, ?, ?, ?) "
+                        "ON CONFLICT(job_id, speaker_label) DO UPDATE SET display_name = excluded.display_name, updated_by = excluded.updated_by, updated_at = excluded.updated_at",
+                        (job_id, speaker_label, display_name, updated_by, timestamp),
+                    )
+                else:
+                    connection.execute(
+                        "DELETE FROM speaker_names WHERE job_id = ? AND speaker_label = ?",
+                        (job_id, speaker_label),
+                    )
 
     def update_job(self, job_id: str, **fields: Any) -> None:
         invalid_fields = set(fields) - JOB_UPDATE_FIELDS

@@ -45,6 +45,13 @@ function formatEta(seconds) {
 let jobsPollTimeout = null;
 
 document.addEventListener('pointerdown', (event) => {
+  const renameButton = event.target.closest('[data-rename-speakers]');
+  if (renameButton) {
+    event.stopPropagation();
+    openSpeakerEditor(renameButton.dataset.renameSpeakers);
+    return;
+  }
+
   const viewButton = event.target.closest('[data-view-job]');
   if (viewButton) {
     event.stopPropagation();
@@ -103,6 +110,7 @@ function jobActionIcon(type) {
     vtt: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10h10M7 14h10"/></svg>',
     docx: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h8M8 17h6"/></svg>',
     json: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4C7 4 7 6 7 8v1c0 2-1 3-3 3 2 0 3 1 3 3v1c0 2 0 4 2 4M15 4c2 0 2 2 2 4v1c0 2 1 3 3 3-2 0-3 1-3 3v1c0 2 0 4-2 4"/></svg>',
+    speakers: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0M16 11a3 3 0 0 1 0 6M18 20a5 5 0 0 0-2-3.9"/></svg>',
     delete: '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M8 6V4h8v2M19 6l-1 14H6L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>'
   };
   return `<span class="job-action-icon">${icons[type] || icons.txt}</span>`;
@@ -117,12 +125,16 @@ function buildJobMenu(job) {
         return `<a class="job-action-link" href="${fileRoot}${fileSuffix}" download>${jobActionIcon(format)}<span>${label}</span></a>`;
       }).join('')
     : '';
+  const speakerAction = job.status === 'done' && job.diarization
+    ? `<button type="button" class="job-action" data-rename-speakers="${job.id}">${jobActionIcon('speakers')}<span>Rename speakers</span></button>`
+    : '';
 
   return `
     <div class="job-actions">
       <button type="button" class="job-more-btn" aria-label="More actions for ${escapeHtml(job.filename)}" aria-expanded="false" data-job-id="${job.id}">⋯</button>
       <div class="job-actions-menu" id="job-menu-${job.id}" hidden>
         <button type="button" class="job-action" data-view-job="${job.id}">${jobActionIcon('transcript')}<span>View transcript</span></button>
+        ${speakerAction}
         ${outputActions}
         <button type="button" class="job-action danger" data-remove-job="${job.id}">${jobActionIcon('delete')}<span>Delete job</span></button>
       </div>
@@ -207,6 +219,81 @@ async function openTranscriptViewer(jobId) {
       state.saving = false;
       saveBtn.disabled = false;
       saveBtn.textContent = 'Save changes';
+    }
+  });
+}
+
+async function openSpeakerEditor(jobId) {
+  const modalId = 'speaker-editor-modal';
+  const existing = document.getElementById(modalId);
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = modalId;
+  modal.className = 'transcript-modal-backdrop';
+  modal.innerHTML = `
+    <div class="transcript-modal speaker-editor-modal" role="dialog" aria-modal="true" aria-labelledby="speaker-editor-title">
+      <div class="transcript-modal-header">
+        <h3 id="speaker-editor-title">Rename speakers</h3>
+        <button type="button" class="transcript-close-btn" aria-label="Close speaker editor">&times;</button>
+      </div>
+      <div class="transcript-modal-body">
+        <p class="meta speaker-editor-intro">Names are applied when exports are regenerated. The original speaker labels remain unchanged.</p>
+        <div id="speaker-editor-list" class="speaker-editor-list"><p class="meta">Loading speakers...</p></div>
+        <p id="speaker-editor-error" class="error"></p>
+      </div>
+      <div class="transcript-modal-actions">
+        <button type="button" id="speaker-save-btn" class="primary">Save and regenerate</button>
+        <button type="button" id="speaker-cancel-btn" class="quiet">Close</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  const list = modal.querySelector('#speaker-editor-list');
+  const error = modal.querySelector('#speaker-editor-error');
+  const saveBtn = modal.querySelector('#speaker-save-btn');
+  const closeModal = () => modal.remove();
+  modal.querySelector('.transcript-close-btn').addEventListener('click', closeModal);
+  modal.querySelector('#speaker-cancel-btn').addEventListener('click', closeModal);
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) closeModal();
+  });
+
+  try {
+    const data = await request(`/api/jobs/${jobId}/speakers`);
+    list.innerHTML = data.speakers.map(speaker => `
+      <label class="speaker-editor-row">
+        <span class="speaker-editor-label">${escapeHtml(speaker.speaker_label)}</span>
+        <span class="speaker-editor-sample">${escapeHtml(speaker.sample)}</span>
+        <input type="text" maxlength="120" data-speaker-label="${escapeHtml(speaker.speaker_label)}" value="${escapeHtml(speaker.display_name)}" placeholder="Display name">
+      </label>
+    `).join('');
+  } catch (requestError) {
+    error.textContent = requestError.message || 'Unable to load speakers.';
+    saveBtn.disabled = true;
+    return;
+  }
+
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    error.textContent = '';
+    const names = {};
+    list.querySelectorAll('[data-speaker-label]').forEach(input => {
+      names[input.dataset.speakerLabel] = input.value.trim();
+    });
+    try {
+      await request(`/api/jobs/${jobId}/speakers`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ names })
+      });
+      await request(`/api/jobs/${jobId}/speakers/regenerate`, { method: 'POST' });
+      closeModal();
+      await loadJobs();
+    } catch (requestError) {
+      error.textContent = requestError.message || 'Unable to regenerate exports.';
+      saveBtn.disabled = false;
     }
   });
 }

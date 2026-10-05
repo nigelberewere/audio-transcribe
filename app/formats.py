@@ -58,8 +58,10 @@ def _has_speakers(segments: list[dict]) -> bool:
     return any(segment.get("speaker") for segment in segments)
 
 
-def _display_text(paragraph: dict, has_speakers: bool) -> str:
-    prefix = f"{paragraph['speaker']}: " if has_speakers and paragraph.get("speaker") else ""
+def _display_text(paragraph: dict, has_speakers: bool, speaker_names: dict[str, str] | None = None) -> str:
+    speaker = paragraph.get("speaker")
+    display_name = speaker_names.get(speaker, speaker) if speaker_names and speaker else speaker
+    prefix = f"{display_name}: " if has_speakers and display_name else ""
     return f"{prefix}{paragraph['text']}"
 
 
@@ -95,26 +97,36 @@ def format_datetime(value: Any = None) -> str:
     return f"{date_str}, {hour}:{minute_ampm}"
 
 
-def write_outputs(job: dict, segments: list[dict], output_dir: Path) -> list[Path]:
+def write_outputs(
+    job: dict,
+    segments: list[dict],
+    output_dir: Path,
+    speaker_names: dict[str, str] | None = None,
+) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = Path(job["filename"]).stem
     paths = []
     paragraphs = group_segments_into_paragraphs(segments)
     has_speakers = _has_speakers(segments)
-    plain = "\n\n".join(_display_text(paragraph, has_speakers) for paragraph in paragraphs)
-    timed = "\n\n".join(f"[{format_timestamp(paragraph['start'])}] {_display_text(paragraph, has_speakers)}" for paragraph in paragraphs)
+    plain = "\n\n".join(_display_text(paragraph, has_speakers, speaker_names) for paragraph in paragraphs)
+    timed = "\n\n".join(f"[{format_timestamp(paragraph['start'])}] {_display_text(paragraph, has_speakers, speaker_names)}" for paragraph in paragraphs)
     if "txt" in job["formats"]:
         path = output_dir / f"{stem}.txt"; path.write_text(plain + "\n", encoding="utf-8"); paths.append(path)
     if "txt_timestamps" in job["formats"]:
         path = output_dir / f"{stem}_timestamps.txt"; path.write_text(timed + "\n", encoding="utf-8"); paths.append(path)
     if "srt" in job["formats"]:
-        body = "\n\n".join(f"{index}\n{format_timestamp(segment.get('start', 0), 'srt')} --> {format_timestamp(segment.get('end', 0), 'srt')}\n{_display_text(segment, has_speakers)}" for index, segment in enumerate(segments, 1) if segment.get("text", "").strip())
+        body = "\n\n".join(f"{index}\n{format_timestamp(segment.get('start', 0), 'srt')} --> {format_timestamp(segment.get('end', 0), 'srt')}\n{_display_text(segment, has_speakers, speaker_names)}" for index, segment in enumerate(segments, 1) if segment.get("text", "").strip())
         path = output_dir / f"{stem}.srt"; path.write_text(body, encoding="utf-8"); paths.append(path)
     if "vtt" in job["formats"]:
-        body = "WEBVTT\n\n" + "\n\n".join(f"{format_timestamp(segment.get('start', 0), 'vtt')} --> {format_timestamp(segment.get('end', 0), 'vtt')}\n{_display_text(segment, has_speakers)}" for segment in segments if segment.get("text", "").strip())
+        body = "WEBVTT\n\n" + "\n\n".join(f"{format_timestamp(segment.get('start', 0), 'vtt')} --> {format_timestamp(segment.get('end', 0), 'vtt')}\n{_display_text(segment, has_speakers, speaker_names)}" for segment in segments if segment.get("text", "").strip())
         path = output_dir / f"{stem}.vtt"; path.write_text(body, encoding="utf-8"); paths.append(path)
     if "json" in job["formats"]:
-        path = output_dir / f"{stem}.json"; path.write_text(json.dumps({"job_id": job["id"], "filename": job["filename"], "model": job["selected_model"], "segments": segments}, indent=2), encoding="utf-8"); paths.append(path)
+        export_segments = [
+            {**segment, "speaker": speaker_names.get(segment.get("speaker"), segment.get("speaker"))}
+            if speaker_names and segment.get("speaker") else dict(segment)
+            for segment in segments
+        ]
+        path = output_dir / f"{stem}.json"; path.write_text(json.dumps({"job_id": job["id"], "filename": job["filename"], "model": job["selected_model"], "segments": export_segments}, indent=2), encoding="utf-8"); paths.append(path)
     if "docx" in job["formats"]:
         from docx import Document
         from docx.shared import RGBColor
@@ -148,7 +160,8 @@ def write_outputs(job: dict, segments: list[dict], output_dir: Path) -> list[Pat
             timestamp_run = para.add_run(f"[{format_timestamp(paragraph['start'])}] ")
             timestamp_run.font.color.rgb = RGBColor(100, 116, 139)
             if has_speakers and paragraph.get("speaker"):
-                speaker_run = para.add_run(f"{paragraph['speaker']}: ")
+                speaker = speaker_names.get(paragraph["speaker"], paragraph["speaker"]) if speaker_names else paragraph["speaker"]
+                speaker_run = para.add_run(f"{speaker}: ")
                 speaker_run.bold = True
                 speaker_run.font.color.rgb = RGBColor(30, 58, 138)
             para.add_run(paragraph["text"])

@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import secrets
@@ -16,6 +17,7 @@ from pydantic import BaseModel
 from .audio import SUPPORTED_EXTENSIONS, check_ffmpeg
 from .config import Settings
 from .db import Database, now
+from .formats import write_outputs
 from .notifications import NotificationService
 from .recordings import RecordingDraftManager
 from .security import hash_password, verify_password
@@ -878,6 +880,10 @@ class TranscriptEdit(BaseModel):
     text: str
 
 
+class SpeakerNamesEdit(BaseModel):
+    names: dict[str, str]
+
+
 def _check_job_access(job: dict[str, Any], user: str) -> None:
     account = database.get_user(user)
     is_admin = bool(account and account.get("role") == "admin")
@@ -888,6 +894,66 @@ def _check_job_access(job: dict[str, Any], user: str) -> None:
     else:
         if not is_admin:
             raise HTTPException(status_code=404, detail="Job not found")
+
+
+def _completed_diarized_job(job_id: str, user: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    job = database.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    _check_job_access(job, user)
+    if job.get("status") != "done":
+        raise HTTPException(status_code=400, detail="Speaker names are only available for completed jobs.")
+    checkpoint = settings.job_dir / job_id / "segments.json"
+    try:
+        segments = json.loads(checkpoint.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="This job has no usable transcript segments.") from exc
+    if not isinstance(segments, list) or not any(isinstance(segment, dict) and segment.get("speaker") for segment in segments):
+        raise HTTPException(status_code=400, detail="This job has no speaker diarization data.")
+    return job, segments
+
+
+def _speaker_context(segments: list[dict[str, Any]], names: dict[str, str]) -> list[dict[str, str]]:
+    samples: dict[str, str] = {}
+    for segment in segments:
+        label = segment.get("speaker")
+        text = str(segment.get("text") or "").strip()
+        if label and text and (label not in samples or len(text) > len(samples[label])):
+            samples[label] = text
+    return [{"speaker_label": label, "display_name": names.get(label, ""), "sample": samples[label][:240]} for label in samples]
+
+
+@app.get("/api/jobs/{job_id}/speakers")
+def list_speakers(job_id: str, user: str = Depends(current_user)):
+    _, segments = _completed_diarized_job(job_id, user)
+    return {"speakers": _speaker_context(segments, database.list_speaker_names(job_id))}
+
+
+@app.put("/api/jobs/{job_id}/speakers")
+def update_speakers(job_id: str, edit: SpeakerNamesEdit, user: str = Depends(current_user)):
+    _, segments = _completed_diarized_job(job_id, user)
+    labels = {segment.get("speaker") for segment in segments if isinstance(segment, dict) and segment.get("speaker")}
+    unknown = set(edit.names) - labels
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown speaker label: {sorted(unknown)[0]}")
+    normalized: dict[str, str] = {}
+    for label, display_name in edit.names.items():
+        value = display_name.strip()
+        if len(value) > 120:
+            raise HTTPException(status_code=400, detail="Speaker display names must be 120 characters or fewer.")
+        normalized[label] = value
+    database.replace_speaker_names(job_id, normalized, user)
+    renamed = [label for label, value in normalized.items() if value]
+    database.add_audit_log(user, "speakers_renamed", job_id, f"labels: {', '.join(sorted(renamed)) or 'none'}")
+    return {"ok": True, "names": database.list_speaker_names(job_id)}
+
+
+@app.post("/api/jobs/{job_id}/speakers/regenerate")
+def regenerate_speaker_outputs(job_id: str, user: str = Depends(current_user)):
+    job, segments = _completed_diarized_job(job_id, user)
+    output_dir = settings.job_dir / job_id / "outputs"
+    paths = write_outputs(job, segments, output_dir, database.list_speaker_names(job_id))
+    return {"ok": True, "outputs": [path.name for path in paths]}
 
 
 @app.get("/api/jobs/{job_id}/preview")

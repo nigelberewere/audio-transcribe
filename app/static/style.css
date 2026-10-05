@@ -206,6 +206,13 @@ button.quiet:active, .quiet:active {
   border-color: var(--ink);
 }
 .transcript-modal-body { padding: 18px 20px; }
+.speaker-editor-modal { width: min(620px, 100%); }
+.speaker-editor-intro { margin: 0 0 16px; }
+.speaker-editor-list { display: grid; gap: 12px; max-height: 52vh; overflow-y: auto; }
+.speaker-editor-row { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+.speaker-editor-label { font-weight: 700; color: var(--ink); }
+.speaker-editor-sample { color: var(--muted); font-size: 13px; line-height: 1.45; }
+.speaker-editor-row input { width: 100%; }
 #transcript-editor { width: 100%; min-height: 420px; resize: vertical; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: #fff; color: var(--ink); font: 14px/1.6 'SFMono-Regular', Consolas, monospace; }
 .transcript-modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 0 20px 20px; }
 .transcript-modal-actions .primary { background: var(--ink); }
