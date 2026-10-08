@@ -132,6 +132,41 @@ def test_database_rejects_dynamic_sql_field_names(tmp_path):
         database.update_job("missing", **{"status = 'done'": "bad"})
 
 
+def test_transcribe_prepends_style_anchor_to_user_initial_prompt(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    settings = Settings()
+    settings.data_dir = tmp_path / "storage"
+    settings.model_dir = tmp_path / "models"
+    settings.ensure_directories()
+    database = Database(settings.db_path)
+    captured = {}
+
+    class FakeWhisperModel:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def transcribe(self, *args, **kwargs):
+            captured.update(kwargs)
+            return iter(()), SimpleNamespace(duration=0.0, language="en")
+
+    monkeypatch.setattr("faster_whisper.WhisperModel", FakeWhisperModel)
+    worker = worker_module.TranscriptionWorker(settings, database)
+    user_prompt = "zingsa files center, board meeting, director general"
+
+    worker._transcribe(
+        {"id": "job-prompt", "language": "en", "initial_prompt": user_prompt},
+        "tiny",
+        tmp_path / "audio.wav",
+        tmp_path / "segments.json",
+        [],
+    )
+
+    assert captured["initial_prompt"].startswith("This is a professionally transcribed meeting recording")
+    assert user_prompt in captured["initial_prompt"]
+    assert captured["initial_prompt"] != user_prompt
+
+
 def test_api_jobs_endpoint_ordering_and_queue_positions(tmp_path, monkeypatch):
     from app import main
     settings = Settings()
@@ -440,4 +475,3 @@ def test_transcription_heartbeat_interpolates_progress_smoothly(tmp_path, monkey
     final_job = database.get_job(job_id)
     assert final_job["status"] == "done"
     assert final_job["progress"] == 100
-

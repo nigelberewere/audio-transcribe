@@ -14,6 +14,9 @@ from .notifications import NotificationService
 from .queue_policy import QueuePolicy
 
 LOGGER = logging.getLogger(__name__)
+INITIAL_PROMPT_STYLE_ANCHOR = (
+    "This is a professionally transcribed meeting recording with proper capitalization and punctuation."
+)
 
 
 class TranscriptionWorker:
@@ -115,7 +118,10 @@ class TranscriptionWorker:
         model = WhisperModel(model_source, device="cpu", compute_type="int8", cpu_threads=os.cpu_count() or 1, download_root=str(self.settings.model_dir))
         audio_offset = segments[-1]["end"] if segments else 0
         language = None if job["language"] == "auto" else job["language"]
-        whisper_segments, info = model.transcribe(str(wav_path), language=language, initial_prompt=job["initial_prompt"] or None, vad_filter=True, condition_on_previous_text=True, without_timestamps=False)
+        user_prompt = (job.get("initial_prompt") or "").strip()
+        # A short style anchor is more predictable than rewriting user terminology, at the cost of some prompt context.
+        initial_prompt = f"{INITIAL_PROMPT_STYLE_ANCHOR} {user_prompt}" if user_prompt else None
+        whisper_segments, info = model.transcribe(str(wav_path), language=language, initial_prompt=initial_prompt, vad_filter=True, condition_on_previous_text=True, without_timestamps=False)
         job["duration"] = getattr(info, "duration", 0.0) or 0.0
         job["detected_language"] = getattr(info, "language", job["language"]) or job["language"]
         job["device"] = "cpu"
